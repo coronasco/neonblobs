@@ -10,17 +10,39 @@ export interface Player {
   country?: string;
   isBot?: boolean;
   ability: 'dash' | 'shield';
-  cooldown: number;
-  invuln?: number;
+  cooldown: number;       // dash cd (sec)
+  invuln?: number;        // invuln pe respawn
   score: number;
   alive: boolean;
-  combo?: number;      // 1,2,3
-  comboT?: number;     // secunde rămase în fereastra de combo
+
+  // combo
+  combo?: number;         // 1..3
+  comboT?: number;        // sec
+
+  // power-ups
+  magnetT?: number;       // sec rămas (atrage particule)
+  shieldT?: number;       // sec rămas (nu poate fi absorbit)
+  fireCD?: number;        // sec până poate trage din nou
 }
+
+export type ParticleKind = 'normal' | 'super' | 'boss';
 
 export interface Particle {
   value: number;
-  kind?: 'normal' | 'super';
+  kind?: ParticleKind;
+}
+
+export type PowerUpKind = 'magnet' | 'shield';
+
+export interface PowerUp {
+  kind: PowerUpKind;
+  ttl: number; // despawn timer (sec)
+}
+
+export interface Bullet {
+  owner: Entity;
+  dmg: number;   // “aria echivalentă” pe care o scade
+  life: number;  // secunde
 }
 
 export interface World {
@@ -31,4 +53,6 @@ export interface World {
   col: Map<Entity, Color>;
   player: Map<Entity, Player>;
   particle: Map<Entity, Particle>;
+  powerup: Map<Entity, PowerUp>;
+  bullet: Map<Entity, Bullet>;
 }

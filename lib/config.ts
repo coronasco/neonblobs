@@ -47,3 +47,26 @@ export const SUPER_EVENT = {
   VALUE: 40,       // baza punctelor (mai trece prin hotspot/combos)
   RADIUS: 10,      // mărimea orbului
 };
+
+export const POWERUPS = {
+  MAGNET_DURATION: 20,
+  SHIELD_DURATION: 20,
+  SPAWN_EVERY: 12,      // sec — probabilistic
+  MAGNET_RADIUS: 260,        // raza de atractie mai mare
+  MAGNET_PULL_SPEED: 320,    // ↑ viteză de urmărire (px/s)
+  MAGNET_SNAP_DIST: 10,      // la distanța asta "se lipește" de player
+};
+
+export const BOSS = {
+  INTERVAL: 80,     // sec între spawn-uri
+  DURATION: 25,     // sec activ
+  RADIUS: 34,
+  VALUE: 120,       // scor mare
+  SPEED: 24,        // se mișcă încet
+};
+
+export const UI_FONT = {
+  SMALL: '600 12px Arial, Helvetica, sans-serif',
+  MEDIUM: '700 14px Arial, Helvetica, sans-serif',
+  LARGE: '800 16px Arial, Helvetica, sans-serif',
+};
