@@ -10,8 +10,8 @@ export const GAME = {
 
 // HARTA — mult mai mare; fără wrap
 export const MAP = {
-  WIDTH: 4000,
-  HEIGHT: 2400,
+  WIDTH: 10000,
+  HEIGHT: 6000,
   WRAP: false
 } as const;
 
@@ -70,3 +70,13 @@ export const UI_FONT = {
   MEDIUM: '700 14px Arial, Helvetica, sans-serif',
   LARGE: '800 16px Arial, Helvetica, sans-serif',
 };
+
+export const SUPPLY = {
+  INTERVAL_MIN: 25,     // seconds between spawns (min)
+  INTERVAL_MAX: 45,     // seconds between spawns (max)
+  TTL: 30,              // seconds the capsule stays on the map
+  R: 16,                // visual radius
+  SHARDS_MIN: 3,
+  SHARDS_MAX: 7,
+  POWERUP_CHANCE: 0.6,  // 60% chance to be a power-up, else shards
+} as const;

@@ -15,8 +15,11 @@ import { bulletsSystem, tryFire } from '@/lib/ecs/systems/bullets';
 import { useGameStore } from '@/lib/state/useGameStore';
 import { useSettings } from '@/lib/state/useSettings';
 import { SFX } from '@/lib/audio/sfx';
-import { getFloaters, updateFloaters, getPings, updatePings } from '@/lib/ui/effects';
+import { getFloaters, updateFloaters, getPings, updatePings, getHits, updateHits, getShake, updateShake } from '@/lib/ui/effects';
+import { useCosmetics } from '@/lib/state/useCosmetics';
 import type { World, Entity, Particle, PowerUp, Bullet } from '@/lib/ecs/types';
+import { supplySystem, initSupplyTimer } from '@/lib/ecs/systems/supply';
+import { SUPPLY } from '@/lib/config';
 
 const SPEED = 140;
 const GRID_STEP = 40;
@@ -24,17 +27,27 @@ const GRID_STEP = 40;
 function clamp(n: number, a: number, b: number) { return Math.max(a, Math.min(b, n)); }
 function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
 
+function outlineHex(id: string): string {
+  switch (id) {
+    case 'magenta': return '#ff4de3';
+    case 'lime': return '#a3ff12';
+    case 'gold': return '#ffd76a';
+    default: return '#00e5ff';
+  }
+}
+
 export default function GameCanvas(): React.ReactElement {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const setUI = useGameStore((s) => s.setUI);
   const country = useGameStore((s) => s.country);
 
-  const inputRef = useRef<{
-    up: boolean; down: boolean; left: boolean; right: boolean;
-    dash: boolean; fire: boolean; mx: number; my: number; mouseInside: boolean;
-  }>({
-    up: false, down: false, left: false, right: false,
-    dash: false, fire: false, mx: 0, my: 0, mouseInside: false,
+  const { equipped } = useCosmetics();
+
+  const outlineId = equipped.outline ?? 'cyan';
+  const trailId = equipped.trail ?? 'neon';
+
+  const inputRef = useRef<{ up: boolean; down: boolean; left: boolean; right: boolean; dash: boolean; fire: boolean; mx: number; my: number; mouseInside: boolean; }>({
+    up: false, down: false, left: false, right: false, dash: false, fire: false, mx: 0, my: 0, mouseInside: false,
   });
 
   const camRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -42,8 +55,6 @@ export default function GameCanvas(): React.ReactElement {
 
   const dashFlashRef = useRef<number>(0);
   const trailRef = useRef<Array<{ x: number; y: number }>>([]);
-
-  // ultima direcție validă de țintire (fallback când nu ai mouse)
   const aimRef = useRef<{ x: number; y: number }>({ x: 1, y: 0 });
 
   const soundOn = useSettings((s) => s.sound);
@@ -66,6 +77,7 @@ export default function GameCanvas(): React.ReactElement {
 
     const w: World = createWorld();
     spawnParticles(w);
+    initSupplyTimer();
 
     let me: Entity = spawnPlayer(w, 'me', false, undefined, country);
 
@@ -108,12 +120,7 @@ export default function GameCanvas(): React.ReactElement {
       inputRef.current.mx = e.clientX - rect.left;
       inputRef.current.my = e.clientY - rect.top;
     };
-    const handleMouseDown = (e: MouseEvent) => {
-      if (e.button === 0) {
-        inputRef.current.fire = true;
-        canvas.setPointerCapture?.((e as unknown as PointerEvent).pointerId ?? 1);
-      }
-    };
+    const handleMouseDown = (e: MouseEvent) => { if (e.button === 0) inputRef.current.fire = true; };
     const handleMouseUp = (e: MouseEvent) => { if (e.button === 0) inputRef.current.fire = false; };
     const handleMouseEnter = () => { inputRef.current.mouseInside = true; };
     const handleMouseLeave = () => { inputRef.current.mouseInside = false; };
@@ -154,11 +161,11 @@ export default function GameCanvas(): React.ReactElement {
       const meComp = w.player.get(me);
       if (!meComp || !meComp.alive) { respawnMe(); return; }
 
-      // gameplay systems
       hotspotSystem(w, dt);
       superEventSystem(w, dt);
       bossSystem(w, dt);
       powerupSystem(w, dt);
+      supplySystem(w, dt);
 
       const vel = w.vel.get(me)!;
       const rad = w.rad.get(me)!.r;
@@ -183,31 +190,21 @@ export default function GameCanvas(): React.ReactElement {
         }
       }
 
-      // === FIRE (mouse sau tasta F) — recalculăm direcția în fiecare frame
+      // FIRE – cursor > viteză > ultima direcție
       {
         const meP = w.pos.get(me)!;
-        const sx = meP.x - camRef.current.x;
-        const sy = meP.y - camRef.current.y;
-
-        // cursor dacă e peste canvas
+        const sx = meP.x - camRef.current.x; const sy = meP.y - camRef.current.y;
         let ax = inputRef.current.mouseInside ? (inputRef.current.mx - sx) : 0;
         let ay = inputRef.current.mouseInside ? (inputRef.current.my - sy) : 0;
         let amag = Math.hypot(ax, ay);
-
-        // dacă nu, folosim viteza; dacă nici asta, ultima direcție validă
         if (amag < 4) {
           const vmag = Math.hypot(vel.x, vel.y);
           if (vmag > 1) { ax = vel.x; ay = vel.y; amag = vmag; }
           else { ax = aimRef.current.x; ay = aimRef.current.y; amag = Math.hypot(ax, ay) || 1; }
         }
-
-        // normalizăm + memorăm
         aimRef.current.x = ax / amag;
         aimRef.current.y = ay / amag;
-
-        if (fire) {
-          tryFire(w, me, aimRef.current.x, aimRef.current.y);
-        }
+        if (fire) tryFire(w, me, aimRef.current.x, aimRef.current.y);
       }
 
       botSystem(w, dt);
@@ -217,19 +214,19 @@ export default function GameCanvas(): React.ReactElement {
       cooldownSystem(w, dt);
       updateFloaters(dt);
       updatePings(dt);
+      updateHits(dt);
+      updateShake(dt);
 
       const meNow = w.player.get(me);
       if (!meNow || !meNow.alive) { respawnMe(); return; }
 
-      // HUD flags (pentru iconurile Lucide din HUD)
       document.body.dataset.magnet = meNow.magnetT && meNow.magnetT > 0 ? 'on' : 'off';
       document.body.dataset.shield = meNow.shieldT && meNow.shieldT > 0 ? 'on' : 'off';
 
-      // trail
       const mePos = w.pos.get(me);
       if (mePos) {
         trailRef.current.push({ x: mePos.x, y: mePos.y });
-        if (trailRef.current.length > 24) trailRef.current.shift();
+        if (trailRef.current.length > 36) trailRef.current.shift();
       }
 
       setUI({
@@ -245,29 +242,36 @@ export default function GameCanvas(): React.ReactElement {
     function render(): void {
       const camX = camRef.current.x, camY = camRef.current.y;
 
+      // screen shake — mic offset random în funcție de intensitate
+      const shake = getShake();
+      const shakeX = shake > 0 ? (Math.random() - 0.5) * 12 * shake : 0;
+      const shakeY = shake > 0 ? (Math.random() - 0.5) * 12 * shake : 0;
+      const rCamX = camX + shakeX;
+      const rCamY = camY + shakeY;
+
+      // bg
       ctx.clearRect(0, 0, GAME.WIDTH, GAME.HEIGHT);
       ctx.fillStyle = '#0a0f1f';
       ctx.fillRect(0, 0, GAME.WIDTH, GAME.HEIGHT);
 
       // grid
-      ctx.strokeStyle = 'rgba(255,255,255,0.06)';
-      ctx.lineWidth = 1;
-      const startX = Math.floor(camX / GRID_STEP) * GRID_STEP;
-      const startY = Math.floor(camY / GRID_STEP) * GRID_STEP;
-      for (let x = startX; x <= camX + GAME.WIDTH; x += GRID_STEP) {
-        const sx = Math.floor(x - camX) + 0.5; ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, GAME.HEIGHT); ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 1;
+      const startX = Math.floor(rCamX / GRID_STEP) * GRID_STEP;
+      const startY = Math.floor(rCamY / GRID_STEP) * GRID_STEP;
+      for (let x = startX; x <= rCamX + GAME.WIDTH; x += GRID_STEP) {
+      const sx = Math.floor(x - rCamX) + 0.5; ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, GAME.HEIGHT); ctx.stroke();
       }
-      for (let y = startY; y <= camY + GAME.HEIGHT; y += GRID_STEP) {
-        const sy = Math.floor(y - camY) + 0.5; ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(GAME.WIDTH, sy); ctx.stroke();
+      for (let y = startY; y <= rCamY + GAME.HEIGHT; y += GRID_STEP) {
+        const sy = Math.floor(y - rCamY) + 0.5; ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(GAME.WIDTH, sy); ctx.stroke();
       }
 
-      // map bounds
+      // bounds
       ctx.strokeStyle = 'rgba(255,255,255,0.12)'; ctx.lineWidth = 2;
-      ctx.strokeRect(-camX + 0.5, -camY + 0.5, MAP.WIDTH, MAP.HEIGHT);
+      ctx.strokeRect(-rCamX + 0.5, -rCamY + 0.5, MAP.WIDTH, MAP.HEIGHT);
 
-      // hotspots glow
+      // hotspots
       HOTSPOTS.forEach((h) => {
-        const hx = h.x - camX, hy = h.y - camY;
+        const hx = h.x - rCamX, hy = h.y - rCamY;
         if (hx + h.r < 0 || hy + h.r < 0 || hx - h.r > GAME.WIDTH || hy - h.r > GAME.HEIGHT) return;
         const grad = ctx.createRadialGradient(hx, hy, 0, hx, hy, h.r);
         grad.addColorStop(0, 'rgba(255,215,0,0.22)'); grad.addColorStop(1, 'rgba(255,215,0,0)');
@@ -275,10 +279,10 @@ export default function GameCanvas(): React.ReactElement {
         ctx.beginPath(); ctx.strokeStyle = 'rgba(255,215,0,0.22)'; ctx.lineWidth = 2; ctx.arc(hx, hy, h.r, 0, Math.PI * 2); ctx.stroke();
       });
 
-      // particles (incl. super/boss)
+      // particles
       w.particle.forEach((part: Particle, e: Entity) => {
         const pos = w.pos.get(e)!; const r = w.rad.get(e)!.r; const c = w.col.get(e)!;
-        const sx = pos.x - camX, sy = pos.y - camY;
+        const sx = pos.x - rCamX, sy = pos.y - rCamY;
         if (sx + r < 0 || sy + r < 0 || sx - r > GAME.WIDTH || sy - r > GAME.HEIGHT) return;
 
         if (part.kind === 'super' || part.kind === 'boss') {
@@ -294,10 +298,10 @@ export default function GameCanvas(): React.ReactElement {
         ctx.shadowBlur = 12; ctx.shadowColor = ctx.fillStyle as string; ctx.fill(); ctx.shadowBlur = 0;
       });
 
-      // power-ups (canvas): cerc pulsant + bulină color distinctă
+      // power-ups (canvas)
       w.powerup.forEach((pu: PowerUp, e: Entity) => {
         const pos = w.pos.get(e)!; const r = w.rad.get(e)!.r;
-        const sx = pos.x - camX, sy = pos.y - camY;
+        const sx = pos.x - rCamX, sy = pos.y - rCamY;
         if (sx + r < 0 || sy + r < 0 || sx - r > GAME.WIDTH || sy - r > GAME.HEIGHT) return;
         const t = performance.now() * 0.005;
         const pulse = 6 + Math.sin(t) * 4;
@@ -306,91 +310,117 @@ export default function GameCanvas(): React.ReactElement {
         ctx.strokeStyle = `rgba(${color},0.85)`; ctx.lineWidth = 3; ctx.stroke();
         ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2);
         ctx.fillStyle = `rgba(${color},0.9)`; ctx.fill();
-        // mic fallback text
         ctx.font = UI_FONT.SMALL; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillStyle = '#0a0f1f'; ctx.fillText(pu.kind === 'magnet' ? 'M' : 'S', sx, sy);
       });
 
-      // trail
-      const trail = trailRef.current;
-      if (trail.length >= 2) {
-        for (let i = 1; i < trail.length; i++) {
-          const a = trail[i - 1], b = trail[i];
-          const ax = a.x - camX, ay = a.y - camY;
-          const bx = b.x - camX, by = b.y - camY;
-          const t = i / trail.length;
-          const color = t < 0.5 ? '0,229,255' : '255,215,0';
-          ctx.strokeStyle = `rgba(${color}, ${Math.max(0.12, t * 0.6)})`;
-          ctx.lineWidth = 3 * t;
-          ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
-        }
+      // SUPPLY DROPS — pulsing capsule
+      w.supply.forEach((sup, e) => {
+        const p = w.pos.get(e)!; const r = w.rad.get(e)!.r;
+        const sx = p.x - rCamX, sy = p.y - rCamY;
+        if (sx + r < 0 || sy + r < 0 || sx - r > GAME.WIDTH || sy - r > GAME.HEIGHT) return;
+
+        const t = performance.now() * 0.006;
+        // halo pulse
+        const halo = 8 + Math.sin(t) * 5;
+        ctx.beginPath(); ctx.arc(sx, sy, r + halo, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(167,139,250,0.85)'; // purple
+        ctx.lineWidth = 3; ctx.stroke();
+
+        // capsule body
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(Math.sin(t*0.7) * 0.1);
+        const wCap = r * 1.4, hCap = r * 1.8, radCap = 10;
+        roundRect(ctx, -wCap/2, -hCap/2, wCap, hCap, radCap);
+        const grad = ctx.createLinearGradient(0, -hCap/2, 0, hCap/2);
+        grad.addColorStop(0, 'rgba(167,139,250,0.95)');
+        grad.addColorStop(1, 'rgba(0,229,255,0.95)');
+        ctx.fillStyle = grad; ctx.fill();
+        // stripe
+        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        ctx.fillRect(-wCap/2 + 4, -2, wCap - 8, 4);
+        ctx.restore();
+
+        // label
+        ctx.font = UI_FONT.SMALL; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        ctx.fillText(sup.loot === 'shards' ? 'SHARDS' : (sup.loot === 'magnet' ? 'MAGNET' : 'SHIELD'), sx, sy + r + 6);
+      });
+
+      // helper for capsule rectangle
+      function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+        const rr = Math.min(r, w/2, h/2);
+        ctx.beginPath();
+        ctx.moveTo(x + rr, y);
+        ctx.arcTo(x + w, y, x + w, y + h, rr);
+        ctx.arcTo(x + w, y + h, x, y + h, rr);
+        ctx.arcTo(x, y + h, x, y, rr);
+        ctx.arcTo(x, y, x + w, y, rr);
+        ctx.closePath();
       }
 
-      // players
+
+      // TRAIL – stiluri multiple
+      drawTrailWithStyle(ctx, rCamX, rCamY, trailRef.current, trailId);
+
+      // players (cu skin outline)
       w.player.forEach((pl, e) => {
         const pos = w.pos.get(e); const rad = w.rad.get(e); const col = w.col.get(e);
         if (!pos || !rad || !col || !pl.alive) return;
         const r = rad.r;
-        const sx = pos.x - camX, sy = pos.y - camY;
+        const sx = pos.x - rCamX, sy = pos.y - rCamY;
         if (sx + r < 0 || sy + r < 0 || sx - r > GAME.WIDTH || sy - r > GAME.HEIGHT) return;
 
         const isMe = pl.id === 'me';
-        const fill = isMe ? 'rgba(0,229,255,0.22)' :
-          `rgba(${Math.floor(col.a * 255)}, ${Math.floor(col.b * 255)}, ${Math.floor(col.g * 255)}, 0.10)`;
-        ctx.fillStyle = fill;
-        ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2); ctx.fill();
+        if (!isMe) {
+          // adversari: simplu
+          const fill = `rgba(${Math.floor(col.a * 255)}, ${Math.floor(col.b * 255)}, ${Math.floor(col.g * 255)}, 0.10)`;
+          ctx.fillStyle = fill; ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2);
+          const strokeCol = `rgba(${Math.floor(col.a * 255)}, ${Math.floor(col.b * 255)}, ${Math.floor(col.g * 255)}, 1)`;
+          ctx.strokeStyle = strokeCol; ctx.lineWidth = 5; ctx.shadowBlur = 16; ctx.shadowColor = strokeCol; ctx.stroke(); ctx.shadowBlur = 0;
+          return;
+        }
 
-        const strokeCol = isMe ? 'rgba(0,229,255,1)' :
-          `rgba(${Math.floor(col.a * 255)}, ${Math.floor(col.b * 255)}, ${Math.floor(col.g * 255)}, 1)`;
-        ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2);
-        ctx.strokeStyle = strokeCol; ctx.lineWidth = 5; ctx.shadowBlur = 16; ctx.shadowColor = strokeCol; ctx.stroke(); ctx.shadowBlur = 0;
+        // player local cu skin
+        drawPlayerWithSkin(ctx, sx, sy, r, outlineId, dashFlashRef.current);
 
-        if (isMe) {
-          if (dashFlashRef.current > 0) {
-            const a = Math.min(1, dashFlashRef.current * 4);
-            ctx.beginPath(); ctx.arc(sx, sy, r + 14, 0, Math.PI * 2);
-            ctx.strokeStyle = `rgba(0,229,255,${a})`; ctx.lineWidth = 5; ctx.shadowBlur = 28; ctx.shadowColor = 'rgba(0,229,255,1)'; ctx.stroke(); ctx.shadowBlur = 0;
-          }
+        // label + shield
+        ctx.font = UI_FONT.MEDIUM; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+        ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.fillText('YOU', sx, sy - r - 12);
+        if (pl.shieldT && pl.shieldT > 0) {
+          ctx.beginPath(); ctx.arc(sx, sy, r + 10, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(255,255,153,0.9)'; ctx.lineWidth = 3; ctx.stroke();
+        }
 
-          // shield vizual
-          if (pl.shieldT && pl.shieldT > 0) {
-            ctx.beginPath(); ctx.arc(sx, sy, r + 10, 0, Math.PI * 2);
-            ctx.strokeStyle = 'rgba(255,255,153,0.9)'; ctx.lineWidth = 3; ctx.stroke();
-          }
-
-          // label YOU
-          ctx.font = UI_FONT.MEDIUM;
-          ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
-          ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.fillText('YOU', sx, sy - r - 12);
-
-          // săgeată spre cel mai apropiat hotspot
-          let nearestDist = Infinity, nearestHX = 0, nearestHY = 0;
-          for (const h of HOTSPOTS) {
-            const dx = h.x - (sx + camX), dy = h.y - (sy + camY);
-            const d = Math.hypot(dx, dy); if (d < nearestDist) { nearestDist = d; nearestHX = h.x; nearestHY = h.y; }
-          }
-          if (nearestDist < HOTSPOT.NEAR_DIST) {
-            const ang = Math.atan2(nearestHY - (sy + camY), nearestHX - (sx + camX));
-            const blink = (Math.sin(performance.now() * 0.01) * 0.5 + 0.5) * 0.8 + 0.2;
-            const ax = sx + Math.cos(ang) * (r + 24), ay = sy + Math.sin(ang) * (r + 24);
-            ctx.save(); ctx.translate(ax, ay); ctx.rotate(ang);
-            ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(18, 0); ctx.moveTo(0, 0); ctx.lineTo(0, -6); ctx.moveTo(0, 0); ctx.lineTo(0, 6);
-            ctx.strokeStyle = `rgba(255,215,0,${blink})`; ctx.lineWidth = 3; ctx.stroke(); ctx.restore();
-          }
+        // săgeată hotspot
+        let nearestDist = Infinity, nearestHX = 0, nearestHY = 0;
+        for (const h of HOTSPOTS) {
+          const dx = h.x - (sx + rCamX), dy = h.y - (sy + rCamY);
+          const d = Math.hypot(dx, dy); if (d < nearestDist) { nearestDist = d; nearestHX = h.x; nearestHY = h.y; }
+        }
+        if (nearestDist < HOTSPOT.NEAR_DIST) {
+          const ang = Math.atan2(nearestHY - (sy + rCamY), nearestHX - (sx + rCamX));
+          const blink = (Math.sin(performance.now() * 0.01) * 0.5 + 0.5) * 0.8 + 0.2;
+          const ax = sx + Math.cos(ang) * (r + 24), ay = sy + Math.sin(ang) * (r + 24);
+          ctx.save(); ctx.translate(ax, ay); ctx.rotate(ang);
+          ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(18, 0); ctx.moveTo(0, 0); ctx.lineTo(0, -6); ctx.moveTo(0, 0); ctx.lineTo(0, 6);
+          ctx.strokeStyle = `rgba(255,215,0,${blink})`; ctx.lineWidth = 3; ctx.stroke(); ctx.restore();
         }
       });
 
       // bullets
       w.bullet.forEach((_b: Bullet, e: Entity) => {
         const p = w.pos.get(e); if (!p) return;
-        const sx = p.x - camX, sy = p.y - camY;
+        const sx = p.x - rCamX, sy = p.y - rCamY;
         ctx.beginPath(); ctx.arc(sx, sy, 3, 0, Math.PI * 2);
         ctx.fillStyle = 'rgba(0,229,255,0.9)'; ctx.fill();
       });
 
       // floaters
       getFloaters().forEach((f) => {
-        const sx = f.x - camX, sy = f.y - camY - (1 - f.life) * 28;
+        const sx = f.x - rCamX, sy = f.y - rCamY - (1 - f.life) * 28;
         if (sx < -20 || sy < -20 || sx > GAME.WIDTH + 20 || sy > GAME.HEIGHT + 20) return;
         const alpha = Math.min(1, f.life * 1.2);
         ctx.save(); ctx.globalAlpha = alpha;
@@ -402,13 +432,30 @@ export default function GameCanvas(): React.ReactElement {
       // pings
       const pArr = getPings();
       pArr.forEach((p) => {
-        const sx = p.x - camX, sy = p.y - camY;
+        const sx = p.x - rCamX, sy = p.y - rCamY;
         if (sx < -40 || sy < -40 || sx > GAME.WIDTH + 40 || sy > GAME.HEIGHT + 40) return;
         const t = 1 - p.life; const radius = 6 + t * 28;
         ctx.beginPath(); ctx.arc(sx, sy, radius, 0, Math.PI * 2);
         ctx.strokeStyle = p.color; ctx.globalAlpha = Math.max(0, 1 - t);
         ctx.lineWidth = 2; ctx.stroke(); ctx.globalAlpha = 1;
       });
+
+      // hit markers (X mic alb)
+      getHits().forEach((h) => {
+        const sx = h.x - rCamX, sy = h.y - rCamY;
+        const a = Math.max(0, h.life); // 0..0.35
+        if (sx < -20 || sy < -20 || sx > GAME.WIDTH + 20 || sy > GAME.HEIGHT + 20) return;
+        const len = 8 + (1 - a) * 6;
+        const alpha = Math.min(1, a * 3);
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(sx - len, sy - len); ctx.lineTo(sx + len, sy + len); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(sx - len, sy + len); ctx.lineTo(sx + len, sy - len); ctx.stroke();
+        ctx.restore();
+      });
+
 
       // minimap
       const MW = 200, MH = Math.floor((MAP.HEIGHT / MAP.WIDTH) * MW);
@@ -422,7 +469,6 @@ export default function GameCanvas(): React.ReactElement {
         ctx.fillStyle = 'rgba(255,215,0,0.9)'; ctx.fill();
       });
 
-      // power-ups pe minimap (cyan / galben)
       w.powerup.forEach((pu: PowerUp, e: Entity) => {
         const pos = w.pos.get(e); if (!pos) return;
         const px = mx + (pos.x / MAP.WIDTH) * MW, py = my + (pos.y / MAP.HEIGHT) * MH;
@@ -438,12 +484,19 @@ export default function GameCanvas(): React.ReactElement {
         ctx.fillStyle = pl.id === 'me' ? 'rgba(0,229,255,1)' : 'rgba(255,255,255,0.9)'; ctx.fill();
       });
 
-      const vx = (camX / MAP.WIDTH) * MW, vy = (camY / MAP.HEIGHT) * MH;
+      // supply drops on minimap
+      w.supply.forEach((sup, e) => {
+        const pos = w.pos.get(e); if (!pos) return;
+        const px = mx + (pos.x / MAP.WIDTH) * MW, py = my + (pos.y / MAP.HEIGHT) * MH;
+        ctx.save(); ctx.translate(px, py); ctx.rotate(Math.PI / 4);
+        ctx.fillStyle = 'rgba(167,139,250,1)';
+        ctx.fillRect(-3, -3, 6, 6);
+        ctx.restore();
+      });
+
+      const vx = (rCamX / MAP.WIDTH) * MW, vy = (rCamY / MAP.HEIGHT) * MH;
       const vw = (GAME.WIDTH / MAP.WIDTH) * MW, vh = (GAME.HEIGHT / MAP.HEIGHT) * MH;
       ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1; ctx.strokeRect(mx + vx, my + vy, vw, vh);
-
-      // SUPER event banner (optional poți muta în HUD)
-      // (dacă vrei, păstrăm aici)
     }
 
     const STEP = 1 / GAME.TPS;
@@ -468,11 +521,251 @@ export default function GameCanvas(): React.ReactElement {
       delete document.body.dataset.magnet;
       delete document.body.dataset.shield;
     };
-  }, [setUI, country, soundOn, hapticsOn]);
+  }, [setUI, country, soundOn, hapticsOn, equipped.outline, equipped.trail]);
 
   return (
     <div className="relative mx-auto w-[1280px] select-none">
-      <canvas ref={canvasRef} className="rounded-2xl shadow-2xl ring-1 ring-white/10" />
+      <canvas ref={canvasRef} className="block rounded-2xl shadow-2xl ring-1 ring-white/10" />
     </div>
   );
+}
+
+/* ========== Rendering helpers (skins & trails) ========== */
+
+function drawPlayerWithSkin(
+  ctx: CanvasRenderingContext2D,
+  sx: number, sy: number, r: number,
+  outlineId: string,
+  dashFlash: number
+): void {
+  // umplutură discretă pentru player local (să vezi masa)
+  ctx.fillStyle = 'rgba(255,255,255,0.06)';
+  ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2); ctx.fill();
+
+  const baseColor = outlineHex(outlineId);
+
+  switch (outlineId) {
+    case 'neoRing': {
+      // 2-3 inele concentrice pulsante
+      const t = performance.now() * 0.005;
+      const rings = [0, 8, 16];
+      rings.forEach((off, i) => {
+        const a = 0.9 - i * 0.25 + Math.sin(t + i) * 0.1;
+        ctx.beginPath(); ctx.arc(sx, sy, r + off, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(0,229,255,${a})`;
+        ctx.lineWidth = i === 0 ? 5 : 3;
+        ctx.shadowBlur = 18 - i * 6; ctx.shadowColor = 'rgba(0,229,255,1)';
+        ctx.stroke(); ctx.shadowBlur = 0;
+      });
+      break;
+    }
+    case 'holoGlass': {
+      // sticlă holografică: gradient + highlight
+      const grad = ctx.createRadialGradient(sx - r * 0.3, sy - r * 0.3, r * 0.2, sx, sy, r + 12);
+      grad.addColorStop(0, 'rgba(255,255,255,0.4)');
+      grad.addColorStop(0.6, 'rgba(0,229,255,0.35)');
+      grad.addColorStop(1, 'rgba(255,215,0,0.15)');
+      ctx.beginPath(); ctx.arc(sx, sy, r + 6, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      ctx.strokeStyle = grad; ctx.lineWidth = 6; ctx.shadowBlur = 22; ctx.shadowColor = '#7ff3ff'; ctx.stroke(); ctx.shadowBlur = 0;
+      // highlight curbat
+      ctx.beginPath();
+      ctx.arc(sx - r * 0.3, sy - r * 0.4, r * 0.8, 0.2 * Math.PI, 0.55 * Math.PI);
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 3; ctx.stroke();
+      break;
+    }
+    case 'circuit': {
+      // contur cyan + “linii” scurte ca trasee
+      ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 5; ctx.shadowBlur = 16; ctx.shadowColor = '#00e5ff'; ctx.stroke(); ctx.shadowBlur = 0;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(0,229,255,0.9)'; ctx.lineWidth = 2;
+      const paths = 12;
+      for (let i = 0; i < paths; i++) {
+        const ang = (i / paths) * Math.PI * 2 + Math.sin(performance.now() * 0.002 + i) * 0.3;
+        const r1 = r - 10, r2 = r + 14;
+        ctx.beginPath();
+        ctx.moveTo(sx + Math.cos(ang) * r1, sy + Math.sin(ang) * r1);
+        ctx.lineTo(sx + Math.cos(ang) * r2, sy + Math.sin(ang) * r2);
+        ctx.stroke();
+      }
+      ctx.restore();
+      break;
+    }
+    case 'hex': {
+      // grilă hexagonală pe margine
+      ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      ctx.strokeStyle = '#7de3ff'; ctx.lineWidth = 5; ctx.shadowBlur = 16; ctx.shadowColor = '#7de3ff'; ctx.stroke(); ctx.shadowBlur = 0;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(125,227,255,0.6)'; ctx.lineWidth = 1;
+      const cells = 16;
+      for (let i = 0; i < cells; i++) {
+        const ang = (i / cells) * Math.PI * 2;
+        const rx = sx + Math.cos(ang) * (r - 6);
+        const ry = sy + Math.sin(ang) * (r - 6);
+        const s = 6;
+        ctx.beginPath();
+        for (let k = 0; k < 6; k++) {
+          const a = ang + (k / 6) * Math.PI * 2;
+          const px = rx + Math.cos(a) * s;
+          const py = ry + Math.sin(a) * s;
+          k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+        }
+        ctx.closePath(); ctx.stroke();
+      }
+      ctx.restore();
+      break;
+    }
+    case 'tiger': {
+      // dungi dinamice
+      ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      ctx.strokeStyle = '#ffd76a'; ctx.lineWidth = 5; ctx.shadowBlur = 16; ctx.shadowColor = '#ffd76a'; ctx.stroke(); ctx.shadowBlur = 0;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,165,0,0.9)'; ctx.lineWidth = 4;
+      const stripes = 8;
+      for (let i = 0; i < stripes; i++) {
+        const base = (i / stripes) * Math.PI * 2 + performance.now() * 0.0012;
+        const a1 = base, a2 = base + 0.2;
+        ctx.beginPath();
+        ctx.arc(sx, sy, r + 6, a1, a2);
+        ctx.stroke();
+      }
+      ctx.restore();
+      break;
+    }
+    case 'aurora': {
+      // gradient polar rotativ
+      const t = performance.now() * 0.0015;
+      const ang = t % (Math.PI * 2);
+      ctx.save();
+      ctx.translate(sx, sy); ctx.rotate(ang);
+      const grd = ctx.createLinearGradient(-r, 0, r, 0);
+      grd.addColorStop(0, 'rgba(0,229,255,0.9)');
+      grd.addColorStop(0.5, 'rgba(255,255,255,0.7)');
+      grd.addColorStop(1, 'rgba(255,215,0,0.9)');
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.strokeStyle = grd; ctx.lineWidth = 6; ctx.shadowBlur = 20; ctx.shadowColor = '#aaf5ff'; ctx.stroke(); ctx.shadowBlur = 0;
+      ctx.restore();
+      break;
+    }
+    default: {
+      // simple: cyan/magenta/lime/gold
+      const strokeCol = outlineHex(outlineId);
+      ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      ctx.strokeStyle = strokeCol; ctx.lineWidth = 5; ctx.shadowBlur = 16; ctx.shadowColor = strokeCol; ctx.stroke(); ctx.shadowBlur = 0;
+    }
+  }
+
+  // flash la dash
+  if (dashFlash > 0) {
+    const a = Math.min(1, dashFlash * 4);
+    ctx.beginPath(); ctx.arc(sx, sy, r + 14, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(0,229,255,1)'; ctx.globalAlpha = a;
+    ctx.lineWidth = 5; ctx.shadowBlur = 28; ctx.shadowColor = 'rgba(0,229,255,1)'; ctx.stroke();
+    ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+  }
+}
+
+function drawTrailWithStyle(
+  ctx: CanvasRenderingContext2D,
+  camX: number, camY: number,
+  trail: Array<{ x: number; y: number }>,
+  styleId: string
+): void {
+  if (trail.length < 2) return;
+
+  switch (styleId) {
+    case 'pixel': {
+      for (let i = 0; i < trail.length; i += 2) {
+        const t = i / trail.length;
+        const q = trail[i];
+        const ax = q.x - camX, ay = q.y - camY;
+        const alpha = Math.max(0.12, t * 0.7);
+        ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+        ctx.fillRect(ax - 2, ay - 2, 4, 4);
+      }
+      break;
+    }
+    case 'plasma': {
+      for (let i = 1; i < trail.length; i++) {
+        const a = trail[i - 1], b = trail[i];
+        const ax = a.x - camX, ay = a.y - camY;
+        const bx = b.x - camX, by = b.y - camY;
+        const t = i / trail.length;
+        const w = 5 + Math.sin(i * 0.6 + performance.now() * 0.006) * 2 + t * 8;
+        const col = t < 0.5 ? '0,229,255' : '255,102,255';
+        ctx.strokeStyle = `rgba(${col}, ${Math.max(0.15, t * 0.7)})`;
+        ctx.lineWidth = w;
+        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+      }
+      break;
+    }
+    case 'circuitTrail': {
+      ctx.save();
+      ctx.setLineDash([6, 8]);
+      for (let i = 1; i < trail.length; i++) {
+        const a = trail[i - 1], b = trail[i];
+        const ax = a.x - camX, ay = a.y - camY;
+        const bx = b.x - camX, by = b.y - camY;
+        const t = i / trail.length;
+        ctx.strokeStyle = `rgba(0,229,255, ${Math.max(0.2, t)})`;
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+      }
+      ctx.restore();
+      break;
+    }
+    case 'comet': {
+      // cap luminos + coadă subțire
+      const head = trail[trail.length - 1];
+      const hx = head.x - camX, hy = head.y - camY;
+      const rad = 10;
+      const grad = ctx.createRadialGradient(hx, hy, 0, hx, hy, rad * 2);
+      grad.addColorStop(0, 'rgba(255,255,255,0.9)');
+      grad.addColorStop(1, 'rgba(0,229,255,0)');
+      ctx.fillStyle = grad; ctx.beginPath(); ctx.arc(hx, hy, rad, 0, Math.PI * 2); ctx.fill();
+
+      for (let i = 1; i < trail.length; i++) {
+        const a = trail[i - 1], b = trail[i];
+        const ax = a.x - camX, ay = a.y - camY;
+        const bx = b.x - camX, by = b.y - camY;
+        const t = i / trail.length;
+        ctx.strokeStyle = `rgba(0,229,255, ${Math.max(0.08, t * 0.5)})`;
+        ctx.lineWidth = 2 * t;
+        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+      }
+      break;
+    }
+    case 'holoTrail': {
+      // additive blending pentru un efect holografic
+      const prev = ctx.globalCompositeOperation;
+      ctx.globalCompositeOperation = 'lighter';
+      for (let i = 1; i < trail.length; i++) {
+        const a = trail[i - 1], b = trail[i];
+        const ax = a.x - camX, ay = a.y - camY;
+        const bx = b.x - camX, by = b.y - camY;
+        const t = i / trail.length;
+        const col = t < 0.5 ? '0,229,255' : '255,215,0';
+        ctx.strokeStyle = `rgba(${col}, ${Math.max(0.18, t * 0.6)})`;
+        ctx.lineWidth = 4 * t;
+        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+      }
+      ctx.globalCompositeOperation = prev;
+      break;
+    }
+    default: {
+      // neon clasic
+      for (let i = 1; i < trail.length; i++) {
+        const a = trail[i - 1], b = trail[i];
+        const ax = a.x - camX, ay = a.y - camY;
+        const bx = b.x - camX, by = b.y - camY;
+        const t = i / trail.length;
+        const color = t < 0.5 ? '0,229,255' : '255,215,0';
+        ctx.strokeStyle = `rgba(${color}, ${Math.max(0.12, t * 0.6)})`;
+        ctx.lineWidth = 3 * t;
+        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+      }
+    }
+  }
 }

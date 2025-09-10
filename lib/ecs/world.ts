@@ -12,6 +12,7 @@ export function createWorld(): World {
     particle: new Map(),
     powerup: new Map(),   // ✅ nou
     bullet: new Map(),    // ✅ nou
+    supply: new Map(),    // ✅ nou
   };
 }
 

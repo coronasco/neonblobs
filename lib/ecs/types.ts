@@ -55,4 +55,11 @@ export interface World {
   particle: Map<Entity, Particle>;
   powerup: Map<Entity, PowerUp>;
   bullet: Map<Entity, Bullet>;
+  supply: Map<Entity, SupplyDrop>;
 }
+
+export type SupplyDrop = {
+  ttl: number;
+  loot: 'magnet' | 'shield' | 'shards';
+  amount?: number; // for shards
+};
