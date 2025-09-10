@@ -2,6 +2,7 @@
 import { useEffect } from 'react';
 import { useSettings } from '@/lib/state/useSettings';
 import { setSfxEnabled } from '@/lib/audio/sfx';
+import { Vibrate, VibrateOff, Volume2, VolumeOff } from 'lucide-react';
 
 export default function SettingsPanel(): React.ReactElement {
   const sound = useSettings((s) => s.sound);
@@ -27,7 +28,7 @@ export default function SettingsPanel(): React.ReactElement {
   }, []);
 
   return (
-    <div className="pointer-events-auto absolute right-4 top-20 z-20 flex gap-2">
+    <div className="pointer-events-auto absolute right-15 top-20 z-20 flex gap-2">
       <button
         onClick={() => setSound(!sound)}
         className={`rounded-lg px-3 py-2 text-sm ring-1 ${
@@ -37,7 +38,7 @@ export default function SettingsPanel(): React.ReactElement {
         aria-label="Toggle sound"
         title="Sound effects on/off"
       >
-        {sound ? '🔊 Sound ON' : '🔇 Sound OFF'}
+        {sound ? <Volume2 className="w-4 h-4" /> : <VolumeOff className="w-4 h-4" />}
       </button>
       <button
         onClick={() => setHaptics(!haptics)}
@@ -48,7 +49,7 @@ export default function SettingsPanel(): React.ReactElement {
         aria-label="Toggle vibration"
         title="Vibration on/off (mobile)"
       >
-        {haptics ? '📳 Vibration ON' : '📴 Vibration OFF'}
+        {haptics ? <Vibrate className="w-4 h-4" /> : <VibrateOff className="w-4 h-4" />}
       </button>
     </div>
   );

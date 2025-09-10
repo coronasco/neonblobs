@@ -15,5 +15,11 @@ export function cooldownSystem(w: World, dt: number) {
   w.player.forEach((pl) => {
     pl.cooldown = Math.max(0, pl.cooldown - dt);
     if (pl.invuln && pl.invuln > 0) pl.invuln = Math.max(0, pl.invuln - dt);
+
+    // combo decays
+    if (pl.comboT !== undefined) {
+      pl.comboT = Math.max(0, (pl.comboT || 0) - dt);
+      if (pl.comboT <= 0) pl.combo = 1;
+    }
   });
 }

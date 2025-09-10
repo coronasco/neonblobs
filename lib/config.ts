@@ -39,3 +39,11 @@ export const HOTSPOT = {
   NEAR_DIST: 600,     // pentru săgeata de direcție
   BONUS_MULT: 2,      // x2 puncte în hotspot
 };
+
+// Super Orb event (periodic)
+export const SUPER_EVENT = {
+  INTERVAL: 50,    // la fiecare ~50s încearcă să pornească un event
+  DURATION: 18,    // timp cât rămâne super-orbul pe hartă
+  VALUE: 40,       // baza punctelor (mai trece prin hotspot/combos)
+  RADIUS: 10,      // mărimea orbului
+};

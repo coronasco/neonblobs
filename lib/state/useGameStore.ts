@@ -6,7 +6,8 @@ interface UIState {
   score: number;
   level: number;
   leaderboard: Array<{ name: string; score: number }>;
-  dashCooldown?: number; // 0..1 (0 = gata de folosit)
+  dashCooldown?: number;   // 0..1 (0 = gata)
+  combo?: number;          // 1..3 (doar display)
 }
 
 interface CountryScore { [code: string]: number; }
@@ -26,7 +27,7 @@ interface GameStore {
 
 export const useGameStore = create<GameStore>((set) => ({
   input: { up: false, down: false, left: false, right: false, dash: false },
-  ui: { score: 0, level: 1, leaderboard: [], dashCooldown: 0 },
+  ui: { score: 0, level: 1, leaderboard: [], dashCooldown: 0, combo: 1 },
 
   country: undefined,
   countryScores: {},
@@ -38,10 +39,7 @@ export const useGameStore = create<GameStore>((set) => ({
   addCountryPoints: (code, delta) => {
     if (!code || delta <= 0) return;
     set((s) => ({
-      countryScores: {
-        ...s.countryScores,
-        [code]: (s.countryScores[code] ?? 0) + delta
-      }
+      countryScores: { ...s.countryScores, [code]: (s.countryScores[code] ?? 0) + delta }
     }));
   }
 }));

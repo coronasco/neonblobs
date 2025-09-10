@@ -7,16 +7,21 @@ export interface Color { a: number; b: number; g: number; }
 
 export interface Player {
   id: string;
-  country?: string;   // țara asociată jucătorului
+  country?: string;
   isBot?: boolean;
   ability: 'dash' | 'shield';
   cooldown: number;
-  invuln?: number;    // secunde invulnerabilitate la spawn
+  invuln?: number;
   score: number;
   alive: boolean;
+  combo?: number;      // 1,2,3
+  comboT?: number;     // secunde rămase în fereastra de combo
 }
 
-export interface Particle { value: number; }
+export interface Particle {
+  value: number;
+  kind?: 'normal' | 'super';
+}
 
 export interface World {
   nextId: number;
