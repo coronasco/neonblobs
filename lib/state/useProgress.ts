@@ -1,7 +1,14 @@
 // lib/state/useProgress.ts
 'use client';
+
 import { create } from 'zustand';
-import { loadProgress, addXpServer, saveProgress, type ProgressRow } from '@/lib/db/progress';
+import {
+  loadProgress,
+  addXpServer,
+  saveProgress,
+  type ProgressRow,
+  patchStatsServer,
+} from '@/lib/db/progress';
 import { supabase } from '@/lib/supabaseClient';
 
 type ProgressState = {
@@ -11,11 +18,15 @@ type ProgressState = {
   xp: number;
   attack: number;
   defense: number;
+  // maxHp este doar local (schema dată nu are coloană pentru max_hp)
   maxHp: number;
+
   hydrate: () => Promise<void>;
   addXp: (delta: number) => Promise<void>;
   patchStats: (patch: Partial<{ attack: number; defense: number; max_hp: number }>) => Promise<void>;
 };
+
+const DEFAULT_MAX_HP = 100;
 
 export const useProgress = create<ProgressState>((set, get) => ({
   loaded: false,
@@ -23,17 +34,24 @@ export const useProgress = create<ProgressState>((set, get) => ({
   level: 1,
   xp: 0,
   attack: 10,
-  defense: 0,
-  maxHp: 100,
+  defense: 5,
+  maxHp: DEFAULT_MAX_HP,
 
   hydrate: async () => {
     const { data } = await supabase.auth.getUser();
     const user = data.user ?? null;
     set({ userId: user?.id ?? null });
 
-    // guest fallback → HUD activ, valori implicite
+    // Guest fallback
     if (!user?.id) {
-      set({ loaded: true, level: 1, xp: 0, attack: 10, defense: 0, maxHp: 100 });
+      set({
+        loaded: true,
+        level: 1,
+        xp: 0,
+        attack: 10,
+        defense: 5,
+        maxHp: DEFAULT_MAX_HP,
+      });
       return;
     }
 
@@ -44,26 +62,30 @@ export const useProgress = create<ProgressState>((set, get) => ({
       xp: row.xp,
       attack: row.attack,
       defense: row.defense,
-      maxHp: row.max_hp,
+      maxHp: DEFAULT_MAX_HP,
     });
   },
 
   addXp: async (delta: number) => {
     const userId = get().userId;
+
+    // Guest: doar local
     if (!userId) {
-      // guest mode – simulează local
-      let xp = Math.max(0, get().xp + delta);
+      let xp = Math.max(0, get().xp + Math.floor(delta));
       let level = get().level;
       while (xp >= 100) { xp -= 100; level += 1; }
       set({ xp, level });
       return;
     }
+
     const next = await addXpServer(userId, delta);
     set({ xp: next.xp, level: next.level });
   },
 
   patchStats: async (patch) => {
     const userId = get().userId;
+
+    // Guest: doar local
     if (!userId) {
       set({
         attack: patch.attack ?? get().attack,
@@ -72,15 +94,16 @@ export const useProgress = create<ProgressState>((set, get) => ({
       });
       return;
     }
-    const p: ProgressRow = {
-      user_id: userId,
-      level: get().level,
-      xp: get().xp,
-      attack: patch.attack ?? get().attack,
-      defense: patch.defense ?? get().defense,
-      max_hp: patch.max_hp ?? get().maxHp,
-    };
-    await saveProgress(p);
-    set({ attack: p.attack, defense: p.defense, maxHp: p.max_hp });
+
+    const next = await patchStatsServer(userId, {
+      attack: patch.attack,
+      defense: patch.defense,
+    });
+
+    set({
+      attack: next.attack,
+      defense: next.defense,
+      maxHp: patch.max_hp ?? get().maxHp,
+    });
   },
 }));

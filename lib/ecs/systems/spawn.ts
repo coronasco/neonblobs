@@ -1,33 +1,72 @@
-import { GAME, MAP, HOTSPOTS } from '@/lib/config';
-import type { World, Entity, Particle } from '../types';
-import { spawn } from '../world';
+// lib/ecs/systems/spawn.ts
+import type { World, Entity } from '../types';
+import { spawn as reserveId } from '../world';
+import { MAP, GAME, HOTSPOTS } from '@/lib/config';
 
-/** === PLAYER SPAWN ===================================================== */
+type SpawnOpts = {
+  level?: number;   // 1..250
+  maxHp?: number;   // dacă vrei să suprascrii calculul default
+  hp?: number;      // hp inițial (default = maxHp)
+  attack?: number;  // suprascrie calculul din level
+  defense?: number; // suprascrie calculul din level
+};
 
+/** calculează stats din level (cap la 250) */
+function statsFromLevel(levelInput?: number) {
+  const lvl = Math.max(1, Math.min(250, Math.floor(levelInput ?? 1)));
+  const attack = 5 + lvl * 0.6;     // scalare lină
+  const defense = 2 + lvl * 0.4;
+  const maxHp = 100 + lvl * 10;     // HP crește vizibil cu level
+  return { lvl, attack, defense, maxHp };
+}
+
+/** găsește un loc relativ liber față de pereți și alți jucători */
+export function findSafeSpawn(w: World): { x: number; y: number } {
+  for (let i = 0; i < 48; i++) {
+    const x = 80 + Math.random() * (MAP.WIDTH - 160);
+    const y = 80 + Math.random() * (MAP.HEIGHT - 160);
+
+    // evită spawn fix în boshi / super orbs (aprox)
+    let ok = true;
+    w.player.forEach((_pl, e) => {
+      const p = w.pos.get(e); const r = w.rad.get(e);
+      if (!p || !r) return;
+      const dx = p.x - x, dy = p.y - y;
+      if (dx * dx + dy * dy < (r.r + 60) * (r.r + 60)) ok = false;
+    });
+    if (ok) return { x, y };
+  }
+  // fallback
+  return { x: MAP.WIDTH * 0.5, y: MAP.HEIGHT * 0.5 };
+}
+
+/** spawnează un player / bot */
 export function spawnPlayer(
   w: World,
   id: string,
-  isBot = false,
-  sizeRand?: number,
-  country?: string
+  isBot: boolean,
+  startRadius?: number,
+  country?: string,
+  opts?: SpawnOpts
 ): Entity {
-  const e = spawn(w);
+  const e = reserveId(w);
 
-  // poziție random inițială; poți ajusta cum dorești
-  const x = Math.random() * (MAP.WIDTH - 400) + 200;
-  const y = Math.random() * (MAP.HEIGHT - 400) + 200;
+  const base = statsFromLevel(opts?.level);
+  const attack = opts?.attack ?? base.attack;
+  const defense = opts?.defense ?? base.defense;
+  const maxHp = Math.round(opts?.maxHp ?? base.maxHp);
+  const hp = Math.round(opts?.hp ?? maxHp);
 
-  const r = sizeRand ? sizeRand : GAME.START_RADIUS;
+  const r = Math.max(10, Math.min(26, startRadius ?? GAME.START_RADIUS));
 
-  w.pos.set(e, { x, y });
+  const spot = findSafeSpawn(w);
+
+  w.pos.set(e, { x: spot.x, y: spot.y });
   w.vel.set(e, { x: 0, y: 0 });
   w.rad.set(e, { r });
-  w.col.set(e, { a: 0.6, b: 0.9, g: 0.7 });
+  w.col.set(e, { a: Math.random(), b: Math.random(), g: Math.random() * 0.5 + 0.5 });
 
-  // stats de bază (pot fi suprascrise ulterior din Supabase)
-  const baseAtk = isBot ? 8 : 10;
-  const baseDef = isBot ? 3 : 5;
-  const baseHp  = isBot ? 70 : 100;
+  w.health.set(e, { hp, maxHp });
 
   w.player.set(e, {
     id,
@@ -36,108 +75,52 @@ export function spawnPlayer(
     ability: 'dash',
     cooldown: 0,
     invuln: 1.0,
-    fireCD: 0,
     score: 0,
     alive: true,
-    combo: 1,
-    comboT: 0,
     magnetT: 0,
     shieldT: 0,
-    attack: baseAtk,
-    defense: baseDef,
+    fireCD: 0,
+    // combat
+    attack,
+    defense,
+    // combo
+    combo: 1,
+    comboT: 0,
   });
-
-  w.health.set(e, { hp: baseHp, maxHp: baseHp });
 
   return e;
 }
 
-/** === PARTICLE SPAWN =================================================== */
-
+/** populare particule pe hartă (normal + câteva super pentru varietate) */
 export function spawnParticles(w: World): void {
-  // umple harta până la GAME.MAX_PARTICLES, bias spre hotspot-uri
-  const want = GAME.MAX_PARTICLES;
-  let created = 0;
+  const total = Math.min(GAME.MAX_PARTICLES, Math.floor((MAP.WIDTH * MAP.HEIGHT) / 32000));
+  const superEvery = Math.max(14, Math.floor(total / 28));
 
-  // helper simplu pentru particule
-  const addParticle = (x: number, y: number, value = 3, kind?: Particle['kind']) => {
-    const e = spawn(w);
+  let count = 0;
+  while (count < total) {
+    const e = reserveId(w);
+    const isSuper = count % superEvery === 0;
+
+    // distribuite uniform, dar ușor atrase de hotspot-uri
+    const useHot = Math.random() < 0.45;
+    let x: number, y: number;
+    if (useHot) {
+      const h = HOTSPOTS[Math.floor(Math.random() * HOTSPOTS.length)];
+      const ang = Math.random() * Math.PI * 2;
+      const rad = Math.random() * h.r;
+      x = h.x + Math.cos(ang) * rad;
+      y = h.y + Math.sin(ang) * rad;
+    } else {
+      x = Math.random() * MAP.WIDTH;
+      y = Math.random() * MAP.HEIGHT;
+    }
+
     w.pos.set(e, { x, y });
-    // rază vizuală derivată din „value”
-    const r = Math.max(3, Math.min(10, 3 + value * 0.6));
-    w.rad.set(e, { r });
-    // culori ușor cian; super/boss au alte culori în alte sisteme
-    w.col.set(e, { a: 0.1 + Math.random() * 0.2, b: 0.85, g: 1 });
-    w.particle.set(e, { value, kind });
-  };
+    w.vel.set(e, { x: 0, y: 0 });
+    w.rad.set(e, { r: isSuper ? 10 : 6 });
+    w.col.set(e, isSuper ? { a: 1, b: 0.4, g: 0.8 } : { a: 0, b: 0.9, g: 1 });
+    w.particle.set(e, { value: isSuper ? 12 : 4, kind: isSuper ? 'super' : 'normal' });
 
-  // 1) particule distribuite uniform
-  const baseCount = Math.floor(want * 0.6);
-  for (let i = 0; i < baseCount; i++) {
-    const x = Math.random() * MAP.WIDTH;
-    const y = Math.random() * MAP.HEIGHT;
-    addParticle(x, y, 3);
-    created++;
+    count++;
   }
-
-  // 2) „pachete” în hotspot-uri (mai multe și mai valoroase)
-  const hotCount = want - created;
-  for (let i = 0; i < hotCount; i++) {
-    const h = HOTSPOTS[i % HOTSPOTS.length];
-    const ang = Math.random() * Math.PI * 2;
-    const rad = Math.random() * h.r * 0.9;
-    const x = h.x + Math.cos(ang) * rad;
-    const y = h.y + Math.sin(ang) * rad;
-    // value ușor mai mare în hotspot
-    const v = 4 + Math.floor(Math.random() * 3); // 4..6
-    addParticle(x, y, v);
-  }
-
-  // opțional: 1-2 „super” la start (event separat le mai adaugă oricum)
-  // pentru pornire interesantă:
-  for (let i = 0; i < 2; i++) {
-    const h = HOTSPOTS[Math.floor(Math.random() * HOTSPOTS.length)];
-    const x = h.x + (Math.random() - 0.5) * h.r * 0.6;
-    const y = h.y + (Math.random() - 0.5) * h.r * 0.6;
-    addParticle(x, y, 10, 'super');
-  }
-}
-
-/** === SAFE RESPAWN LOCATOR ============================================ */
-
-export function findSafeSpawn(w: World): { x: number; y: number } {
-  // caută un punct care să NU fie foarte aproape de alți jucători mari
-  // încercări limitate, apoi fallback
-  const MAX_TRIES = 40;
-  const SAFE_MARGIN = 160;
-
-  for (let t = 0; t < MAX_TRIES; t++) {
-    const x = Math.random() * (MAP.WIDTH - 400) + 200;
-    const y = Math.random() * (MAP.HEIGHT - 400) + 200;
-
-    let ok = true;
-    w.player.forEach((_pl, pe) => {
-      const pp = w.pos.get(pe); const rr = w.rad.get(pe);
-      if (!pp || !rr) return;
-      const dx = pp.x - x, dy = pp.y - y;
-      const dist = Math.hypot(dx, dy);
-      if (dist < rr.r + SAFE_MARGIN) ok = false;
-    });
-
-    if (!ok) continue;
-
-    // opțional: mai evităm și „pachete” de particule dense
-    let density = 0;
-    w.particle.forEach((_pa, e) => {
-      const p = w.pos.get(e); if (!p) return;
-      const dx = p.x - x, dy = p.y - y;
-      if (dx * dx + dy * dy <= 180 * 180) density++;
-    });
-    if (density > 40) continue;
-
-    return { x, y };
-  }
-
-  // fallback: centru hărții
-  return { x: MAP.WIDTH / 2, y: MAP.HEIGHT / 2 };
 }

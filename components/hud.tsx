@@ -21,9 +21,17 @@ export default function Hud(): React.ReactElement {
   const dashReady = dashPerc <= 0.01;
   const combo = Math.max(1, ui.combo ?? 1);
 
+  const boss = (ui as { boss?: { active: boolean; t: number; tMax: number } })?.boss;
+
   useEffect(() => {
-    let raf = 0; let last = performance.now();
-    const loop = (now: number) => { const dt = (now - last) / 1000; last = now; tickFeed(Math.min(0.05, dt)); raf = requestAnimationFrame(loop); };
+    let raf = 0;
+    let last = performance.now();
+    const loop = (now: number) => {
+      const dt = (now - last) / 1000;
+      last = now;
+      tickFeed(Math.min(0.05, dt));
+      raf = requestAnimationFrame(loop);
+    };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
   }, [tickFeed]);
@@ -33,6 +41,22 @@ export default function Hud(): React.ReactElement {
 
   return (
     <div className="pointer-events-none absolute z-10 mx-auto w-full h-full">
+      {/* === BOSS BANNER === */}
+      {boss?.active && (
+        <div className="absolute left-1/2 top-2 -translate-x-1/2">
+          <div className="pointer-events-auto rounded-xl bg-black/60 px-4 py-2 text-white ring-1 ring-white/15 shadow-lg">
+            <div className="text-center font-semibold">
+              ⚠️ BOSS on map — {Math.ceil(boss.t)}s
+            </div>
+            <div className="mt-1 h-1 w-64 rounded bg-white/10">
+              <div
+                className="h-1 rounded bg-fuchsia-400"
+                style={{ width: `${Math.max(0, Math.min(1, boss.t / boss.tMax)) * 100}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
       {/* SCORE + COMBO */}
       <div className="absolute left-2 top-2 flex items-center gap-3">
         <div className="rounded-xl bg-black/40 p-2 text-sm py-2 md:px-4 md:py-2 md:text-4xl font-extrabold tracking-tight text-cyan-300 ring-1 ring-white/15 shadow-[0_8px_24px_rgba(0,0,0,0.35)]">

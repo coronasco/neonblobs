@@ -10,8 +10,8 @@ export const GAME = {
 
 // HARTA — mult mai mare; fără wrap
 export const MAP = {
-  WIDTH: 2600,
-  HEIGHT: 1800,
+  WIDTH: 5600,
+  HEIGHT: 4800,
   WRAP: false
 } as const;
 
@@ -58,15 +58,12 @@ export const POWERUPS = {
 };
 
 export const BOSS = {
-  // interval aleator 8–12 minute
-  INTERVAL_MIN: 480,
-  INTERVAL_MAX: 720,
-  DURATION: 45,     // stă mai mult pe hartă
+  INTERVAL_MIN: 480,      // 8 min
+  INTERVAL_MAX: 720,      // 12 min
+  DURATION: 45,           // sec cât rămâne
   RADIUS: 34,
-  VALUE: 220,       // scor mare la kill (absorb)
+  VALUE: 220,             // scor mare la kill
   SPEED: 24,
-
-  // combat
   AGGRO_RANGE: 620,
   SHOOT_EVERY: 1.6,
   BULLET_SPEED: 240,

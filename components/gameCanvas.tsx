@@ -14,6 +14,7 @@ import { hotspotSystem } from '@/lib/ecs/systems/hotspots';
 import { superEventSystem } from '@/lib/ecs/systems/events';
 import { powerupSystem } from '@/lib/ecs/systems/powerups';
 import { bossSystem } from '@/lib/ecs/systems/boss';
+import { useProgress } from '@/lib/state/useProgress';
 import { bulletsSystem, tryFire } from '@/lib/ecs/systems/bullets';
 import { supplySystem, initSupplyTimer } from '@/lib/ecs/systems/supply';
 import { useGameStore } from '@/lib/state/useGameStore';
@@ -27,6 +28,7 @@ import {
 } from '@/lib/ui/effects';
 import { useCosmetics } from '@/lib/state/useCosmetics';
 import type { World, Entity, Particle, PowerUp, Bullet } from '@/lib/ecs/types';
+import { getBossStatus } from '@/lib/ecs/systems/boss';
 
 const SPEED = 140;
 const GRID_STEP = 40;
@@ -44,6 +46,7 @@ function outlineHex(id: string): string {
 }
 
 export default function GameCanvas(): React.ReactElement {
+  const { loaded, attack, defense, maxHp } = useProgress();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const setUI = useGameStore((s) => s.setUI);
   const country = useGameStore((s) => s.country);
@@ -123,6 +126,13 @@ export default function GameCanvas(): React.ReactElement {
     initSupplyTimer();
 
     let me: Entity = spawnPlayer(w, 'me', false, undefined, country);
+
+    if (loaded) {
+      const pl0 = w.player.get(me);
+      if (pl0) { pl0.attack = attack; pl0.defense = defense; }
+      const hc0 = w.health.get(me);
+      if (hc0) { hc0.maxHp = maxHp; hc0.hp = Math.min(hc0.hp ?? maxHp, maxHp); }
+    }
 
     const bots = ['RO','IT','US','DE','FR','ES','GB','PL'] as const;
     const rBetween = (a: number, b: number) => a + Math.random() * (b - a);
@@ -257,7 +267,18 @@ export default function GameCanvas(): React.ReactElement {
       const p = w.pos.get(me);
       if (p) { p.x = spot.x; p.y = spot.y; }
       const pl = w.player.get(me);
-      if (pl) { pl.invuln = 1.0; pl.combo = 1; pl.comboT = 0; }
+      if (pl) {
+        pl.invuln = 1.0;
+        pl.combo = 1;
+        pl.comboT = 0;
+        if (loaded) { pl.attack = attack; pl.defense = defense; }
+      }
+      const hcR = w.health.get(me);
+      if (hcR) {
+        hcR.maxHp = loaded ? maxHp : (hcR.maxHp ?? 100);
+        hcR.hp = hcR.maxHp;
+      }
+      
       camRef.current.x = clamp(p!.x - VW / 2, 0, MAP.WIDTH - VW);
       camRef.current.y = clamp(p!.y - VH / 2, 0, MAP.HEIGHT - VH);
       camTargetRef.current = { ...camRef.current };
@@ -347,6 +368,7 @@ export default function GameCanvas(): React.ReactElement {
       }
 
       const hpC = w.health.get(me);
+      const bs = getBossStatus();
 
       setUI({
         score: meNow.score,
@@ -356,6 +378,7 @@ export default function GameCanvas(): React.ReactElement {
         maxHp: hpC?.maxHp ?? 0,
         attack: meNow.attack,
         defense: meNow.defense,
+        boss: { active: bs.active, t: bs.timeLeft, tMax: bs.duration },
       });
 
       updateCamera();

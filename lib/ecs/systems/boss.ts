@@ -1,30 +1,47 @@
 // lib/ecs/systems/boss.ts
-import { BOSS, HOTSPOTS } from '@/lib/config';
 import type { World, Entity } from '../types';
+import { BOSS, HOTSPOTS, SUPPLY } from '@/lib/config';
+import { removeEntity } from '../world';
+import { useGameStore } from '@/lib/state/useGameStore';
 
-function nextInterval(): number {
-  const min = BOSS.INTERVAL_MIN ?? 480; // ~8 min
-  const max = BOSS.INTERVAL_MAX ?? 720; // ~12 min
-  return min + Math.random() * Math.max(1, max - min);
-}
+// === Status UI (citit din GameCanvas + HUD) ===
+export type BossStatus = { active: boolean; timeLeft: number; duration: number };
 
-let timer: number = nextInterval();
 let bossId: Entity | null = null;
-let bossT = 0;
-let target: { x: number; y: number } | null = null;
+let timeLeft = 0;
+let duration = 0;
+
+// spawn cadence
+let timer = rand(BOSS.INTERVAL_MIN, BOSS.INTERVAL_MAX);
+
+// AI fire control
 let fireCD = 0;
 
+// memorează o țintă de mișcare ca să nu „vibreze”
+let target: { x: number; y: number } | null = null;
+
+export function getBossStatus(): BossStatus {
+  return { active: bossId !== null, timeLeft: Math.max(0, timeLeft), duration };
+}
+
 export function bossSystem(w: World, dt: number): void {
-  // ===== boss activ =====
+  // dacă avem boss activ -> update/AI
   if (bossId !== null) {
-    bossT -= dt;
+    timeLeft -= dt;
     fireCD = Math.max(0, fireCD - dt);
 
     const pos = w.pos.get(bossId);
     const vel = w.vel.get(bossId);
-    if (!pos || !vel) { bossId = null; return; }
+    const rad = w.rad.get(bossId);
+    if (!pos || !vel || !rad) {
+      bossId = null;
+      timeLeft = 0;
+      duration = 0;
+      timer = rand(BOSS.INTERVAL_MIN, BOSS.INTERVAL_MAX);
+      return;
+    }
 
-    // mișcare lentă într-un punct țintă dintr-un hotspot
+    // mișcare lentă între puncte din hotspot-uri
     if (!target) {
       const h = HOTSPOTS[Math.floor(Math.random() * HOTSPOTS.length)];
       target = {
@@ -32,75 +49,129 @@ export function bossSystem(w: World, dt: number): void {
         y: h.y + (Math.random() - 0.5) * h.r * 0.8,
       };
     }
-    const dx = (target.x - pos.x);
-    const dy = (target.y - pos.y);
-    const d  = Math.hypot(dx, dy) || 1;
-    vel.x = (dx / d) * (BOSS.SPEED ?? 24);
-    vel.y = (dy / d) * (BOSS.SPEED ?? 24);
-    pos.x += vel.x * dt;
-    pos.y += vel.y * dt;
+    const dx = (target.x - pos.x), dy = (target.y - pos.y);
+    const d = Math.hypot(dx, dy) || 1;
+    vel.x = (dx / d) * BOSS.SPEED;
+    vel.y = (dy / d) * BOSS.SPEED;
+    pos.x += vel.x * dt; pos.y += vel.y * dt;
     if (d < 12) target = null;
 
-    // caută cel mai apropiat player în range (fără 'never')
-    let bestE: Entity | null = null;
-    let bestX = 0, bestY = 0, bestD = Infinity;
+    // auto-attack: ținta cea mai apropiată (player sau bot) în range
+    type Target = { e: Entity; x: number; y: number; dist: number };
+    let best: Target | null = null;
 
     w.player.forEach((pl, e) => {
       if (!pl.alive) return;
-      const p = w.pos.get(e);
-      if (!p) return;
-      const ddx = p.x - pos.x;
-      const ddy = p.y - pos.y;
+      const pp = w.pos.get(e);
+      if (!pp) return;
+      const ddx = pp.x - pos.x, ddy = pp.y - pos.y;
       const dist = Math.hypot(ddx, ddy);
-      if (dist <= (BOSS.AGGRO_RANGE ?? 620) && dist < bestD) {
-        bestE = e; bestX = p.x; bestY = p.y; bestD = dist;
+      if (dist <= BOSS.AGGRO_RANGE) {
+        if (!best || dist < best.dist) best = { e, x: pp.x, y: pp.y, dist };
       }
     });
 
-    if (bestE !== null && fireCD <= 0 && bestD > 0) {
-      const vx = (bestX - pos.x) / bestD;
-      const vy = (bestY - pos.y) / bestD;
-      spawnBossBullet(
-        w,
-        pos.x,
-        pos.y,
-        vx,
-        vy,
-        (BOSS.BULLET_SPEED ?? 240),
-        (BOSS.BULLET_DMG ?? 45)
-      );
-      const baseCadence = BOSS.SHOOT_EVERY ?? 1.6;
+    if (best && fireCD <= 0) {
+      const bestTarget = best as { x: number; y: number; dist: number };
+      const vx = (bestTarget.x - pos.x) / (bestTarget.dist || 1);
+      const vy = (bestTarget.y - pos.y) / (bestTarget.dist || 1);
+      spawnBossBullet(w, pos.x, pos.y, vx, vy, BOSS.BULLET_SPEED, BOSS.BULLET_DMG);
+      const baseCadence = BOSS.SHOOT_EVERY;
       fireCD = baseCadence * (0.9 + Math.random() * 0.3);
     }
 
-    // expiră boss-ul
-    if (bossT <= 0) {
+    // despawn natural
+    if (timeLeft <= 0) {
       bossId = null;
-      timer = nextInterval();
+      duration = 0;
+      timer = rand(BOSS.INTERVAL_MIN, BOSS.INTERVAL_MAX);
     }
     return;
   }
 
-  // ===== boss inactiv — countdown până la spawn =====
+  // nu avem boss → countdown până la următorul spawn
   timer -= dt;
   if (timer > 0) return;
 
-  // spawn într-un hotspot
-  const h = HOTSPOTS[Math.floor(Math.random() * HOTSPOTS.length)];
+  // spawn
   const e = (w.nextId++);
+  const h = HOTSPOTS[Math.floor(Math.random() * HOTSPOTS.length)];
   const x = h.x, y = h.y;
 
   w.pos.set(e, { x, y });
   w.vel.set(e, { x: 0, y: 0 });
-  w.rad.set(e, { r: BOSS.RADIUS ?? 34 });
-  w.col.set(e, { a: 1, b: 0.2, g: 0.8 }); // magenta intens
-  w.particle.set(e, { value: BOSS.VALUE ?? 220, kind: 'boss' });
+  w.rad.set(e, { r: BOSS.RADIUS });
+  w.col.set(e, { a: 1, b: 0.2, g: 0.8 }); // mov
+  w.particle.set(e, { value: BOSS.VALUE, kind: 'boss' });
 
   bossId = e;
-  bossT  = BOSS.DURATION ?? 45;
-  timer  = nextInterval();
-  fireCD = 1.2; // mic delay până la primul foc
+  duration = BOSS.DURATION;
+  timeLeft = duration;
+  timer = rand(BOSS.INTERVAL_MIN, BOSS.INTERVAL_MAX) + BOSS.DURATION;
+  target = null;
+  fireCD = 0;
+
+  // anunț pe killfeed
+  try {
+    const { pushFeed } = useGameStore.getState();
+    pushFeed?.('⚠️ BOSS spawned! Find it and fight!');
+  } catch {}
 }
+
+/** apelată din bullets / collisions când boss-ul moare */
+export function bossKilled(w: World, killer: Entity): void {
+  if (bossId === null) return;
+  const p = w.pos.get(bossId);
+
+  // puncte către killer
+  const killerPl = w.player.get(killer);
+  if (killerPl) {
+    killerPl.score += BOSS.VALUE;
+    try {
+      const { addCountryPoints, pushFeed } = useGameStore.getState();
+      addCountryPoints?.(killerPl.country, BOSS.VALUE);
+      pushFeed?.(`${killerPl.id} defeated the BOSS! +${BOSS.VALUE} pts`);
+    } catch {}
+  }
+
+  // drop shards (supply) în jurul boss-ului
+  if (p) {
+    const drops = 5 + Math.floor(Math.random() * 4); // 5..8
+    for (let i = 0; i < drops; i++) {
+      const e = (w.nextId++);
+      const ang = Math.random() * Math.PI * 2;
+      const r = 40 + Math.random() * 80;
+      const x = p.x + Math.cos(ang) * r;
+      const y = p.y + Math.sin(ang) * r;
+
+      w.pos.set(e, { x, y });
+      w.vel.set(e, { x: 0, y: 0 });
+      w.rad.set(e, { r: 12 });
+      w.col.set(e, { a: 0.66, b: 0.66, g: 1 });
+      w.supply.set(e, {
+        ttl: 30,
+        loot: 'shards',
+        amount: randInt(SUPPLY.SHARDS_MIN + 2, SUPPLY.SHARDS_MAX + 4),
+      });
+    }
+  }
+
+  // curățăm boss entity
+  removeEntity(w, bossId);
+  bossId = null;
+  duration = 0;
+  timeLeft = 0;
+  target = null;
+  fireCD = 0;
+}
+
+export function isBoss(e: Entity): boolean {
+  return bossId !== null && e === bossId;
+}
+
+// helpers
+function rand(a: number, b: number) { return a + Math.random() * (b - a); }
+function randInt(a: number, b: number) { return Math.floor(rand(a, b + 1)); }
 
 function spawnBossBullet(
   w: World,
@@ -110,16 +181,11 @@ function spawnBossBullet(
   dirY: number,
   speed: number,
   dmg: number
-): void {
+) {
   const e = (w.nextId++);
-  const d = Math.hypot(dirX, dirY) || 1;
-  const vx = (dirX / d) * speed;
-  const vy = (dirY / d) * speed;
-
   w.pos.set(e, { x, y });
-  w.vel.set(e, { x: vx, y: vy });
-  w.rad.set(e, { r: 4 });
-  w.col.set(e, { a: 1, b: 0.3, g: 0.7 }); // roz/violet
-  // owner "negativ" => proiectil de boss (nu e în w.player)
-  w.bullet.set(e, { owner: (-1 as unknown as Entity), dmg, life: 2.5 });
+  w.vel.set(e, { x: dirX * speed, y: dirY * speed });
+  w.rad.set(e, { r: 3 });
+  w.col.set(e, { a: 1, b: 0.4, g: 0.8 }); // mov
+  w.bullet.set(e, { owner: -1 as unknown as Entity, dmg, life: 2.5, bounces: 0 });
 }

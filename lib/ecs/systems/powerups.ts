@@ -1,3 +1,4 @@
+// lib/ecs/systems/powerups.ts
 import { MAP, POWERUPS } from '@/lib/config';
 import type { World, PowerUpKind } from '../types';
 
@@ -11,12 +12,12 @@ export function powerupSystem(w: World, dt: number): void {
     const e = (w.nextId++);
     const kind: PowerUpKind = Math.random() < 0.5 ? 'magnet' : 'shield';
     w.pos.set(e, { x: Math.random() * MAP.WIDTH, y: Math.random() * MAP.HEIGHT });
-    w.rad.set(e, { r: 12 }); // puțin mai mare ca să fie vizibil
+    w.rad.set(e, { r: 12 });
     w.col.set(e, kind === 'magnet' ? { a: 0, b: 0.9, g: 1 } : { a: 1, b: 1, g: 0.2 });
     w.powerup.set(e, { kind, ttl: 25 });
   }
 
-  // decay
+  // decay power-ups pe hartă
   w.powerup.forEach((pu, e) => {
     pu.ttl -= dt;
     if (pu.ttl <= 0) {
@@ -41,7 +42,7 @@ export function powerupSystem(w: World, dt: number): void {
       }
     });
 
-    // === MAGNET HOMING REAL ===
+    // === MAGNET homing ===
     if (pl.magnetT && pl.magnetT > 0) {
       const R2 = POWERUPS.MAGNET_RADIUS * POWERUPS.MAGNET_RADIUS;
       const speed = POWERUPS.MAGNET_PULL_SPEED;
@@ -54,15 +55,9 @@ export function powerupSystem(w: World, dt: number): void {
         if (d2 > R2) return;
 
         const d = Math.sqrt(Math.max(1, d2));
-        // deplasare directă spre player cu viteză constantă (nu doar accelerație)
         const step = Math.min(d, speed * dt);
         pp.x += (dx / d) * step;
         pp.y += (dy / d) * step;
-
-        // snap dacă foarte aproape → îl lăsăm pe sistemul de coliziuni să finalizeze în același frame
-        if (d <= POWERUPS.MAGNET_SNAP_DIST) {
-          // opțional: poți pune aici o mică vibrație sau sfx
-        }
       });
 
       pl.magnetT = Math.max(0, pl.magnetT - dt);

@@ -8,12 +8,11 @@ import { HOTSPOTS, HOTSPOT } from '@/lib/config';
 import { SFX } from '@/lib/audio/sfx';
 import { useSettings } from '@/lib/state/useSettings';
 import { addFloater, addPing } from '@/lib/ui/effects';
-import { onBotKilled } from './ai';
+import { isBoss, bossKilled } from './boss';
 
-const ABSORB_FACTOR = 0.65;
-const RADIUS_CAP    = 180;
-const EPS           = 1e-3;
-const COMBO_WINDOW  = 2.0; // secunde pentru combo în hotspot
+const EPS = 1e-3;
+const COMBO_WINDOW = 2.0; // secunde pentru combo în hotspot
+const ABSORB_FACTOR = 0.15; // mai mic, doar efect vizual
 
 function inHotspot(x: number, y: number): boolean {
   for (const h of HOTSPOTS) {
@@ -26,8 +25,8 @@ function inHotspot(x: number, y: number): boolean {
 export function collisionSystem(w: World): void {
   const grid = buildGrid(w, 64);
   const addCountryPoints = useGameStore.getState().addCountryPoints;
-  const pushFeed         = useGameStore.getState().pushFeed;
-  const settings         = useSettings.getState();
+  const pushFeed = useGameStore.getState().pushFeed;
+  const settings = useSettings.getState();
 
   w.player.forEach((pla, pe) => {
     if (!pla.alive || !w.pos.has(pe) || !w.rad.has(pe)) return;
@@ -48,8 +47,7 @@ export function collisionSystem(w: World): void {
 
       // ---------- PLAYER vs PARTICLE ----------
       if (w.particle.has(other)) {
-        const fp = w.pos.get(other);
-        const fr = w.rad.get(other);
+        const fp = w.pos.get(other); const fr = w.rad.get(other);
         if (!fp || !fr) continue;
 
         const dx = pp.x - fp.x, dy = pp.y - fp.y;
@@ -71,11 +69,11 @@ export function collisionSystem(w: World): void {
           pla.score += gained;
           addCountryPoints(pla.country, gained);
 
-          // creștere pe arie (limitată)
-          const newArea = rToArea(pr) + rToArea(fr.r) * 0.08;
-          w.rad.get(pe)!.r = Math.min(areaToR(newArea), RADIUS_CAP);
+          // Efect vizual: creștere ușoară a razei
+          const newArea = rToArea(pr) + rToArea(fr.r) * ABSORB_FACTOR;
+          w.rad.get(pe)!.r = areaToR(newArea);
 
-          // Floater & ping
+          // Floater & ping în funcție de tipul particulei
           if (pInfo.kind === 'super' || pInfo.kind === 'boss') {
             const parts = [`+${gained}`, pInfo.kind === 'boss' ? 'BOSS' : 'SUPER'];
             if (hotspotMult > 1) parts.push('x2');
@@ -90,15 +88,19 @@ export function collisionSystem(w: World): void {
             addFloater(fp.x, fp.y, parts.join(' '), '#00e5ff');
             if (settings.sound) SFX.pickup();
           }
-
           if (settings.haptics && 'vibrate' in navigator) navigator.vibrate?.(10);
         }
 
-        removeEntity(w, other);
+        // Dacă particula era boss & a ajuns foarte mică, marcăm kill-ul (fallback în caz că a fost „mâncat”)
+        if (isBoss(other)) {
+          bossKilled(w, pe);
+        } else {
+          removeEntity(w, other);
+        }
         continue;
       }
 
-      // ---------- PLAYER vs PLAYER ----------
+      // ---------- PLAYER vs PLAYER (ramming) ----------
       if (w.player.has(other)) {
         const plb = w.player.get(other)!;
         if (!plb.alive) continue;
@@ -106,8 +108,7 @@ export function collisionSystem(w: World): void {
         // invulnerabilitate (respawn shield) – ignoră
         if ((pla.invuln && pla.invuln > 0) || (plb.invuln && plb.invuln > 0)) continue;
 
-        const pb = w.pos.get(other);
-        const rb = w.rad.get(other);
+        const pb = w.pos.get(other); const rb = w.rad.get(other);
         if (!pb || !rb) continue;
 
         const dx = pp.x - pb.x, dy = pp.y - pb.y;
@@ -115,7 +116,7 @@ export function collisionSystem(w: World): void {
         const radSum = pr + rb.r;
         if (dist2 > radSum * radSum) continue;
 
-        // mărimi aproape egale → respingere (bounce), nu absorbim
+        // dacă mărimile sunt aproape egale → respingere ușoară
         if (Math.abs(pr - rb.r) <= EPS) {
           const vA = w.vel.get(pe), vB = w.vel.get(other);
           if (vA && vB) {
@@ -128,56 +129,67 @@ export function collisionSystem(w: World): void {
           continue;
         }
 
-        // determină cine e mare/mic
-        const big: Entity   = pr > rb.r ? pe : other;
-        const small: Entity = big === pe ? other : pe;
+        // DAMAGE în ambele sensuri, în funcție de mărime + ATK/DEF
+        const hpA = w.health.get(pe);
+        const hpB = w.health.get(other);
+        if (hpA && hpB) {
+          const atkA = pla.attack ?? 10, defB = plb.defense ?? 0;
+          const atkB = plb.attack ?? 10, defA = pla.defense ?? 0;
+          const mag = Math.max(0.6, Math.min(1.4, (pr / Math.max(1, rb.r)))); // cât de mare e A vs B
 
-        // dacă cel mic are SHIELD activ → respingere + STOP
-        const smallPl = w.player.get(small);
-        if (smallPl && smallPl.shieldT && smallPl.shieldT > 0) {
-          const vSmall = w.vel.get(small);
-          const vBig   = w.vel.get(big);
-          const pSmall = w.pos.get(small)!;
-          const pBig   = w.pos.get(big)!;
-          const dx2 = pSmall.x - pBig.x, dy2 = pSmall.y - pBig.y;
-          const d2  = Math.hypot(dx2, dy2) || 1;
-          const nx  = dx2 / d2, ny = dy2 / d2;
-          if (vSmall) { vSmall.x += nx * 220; vSmall.y += ny * 220; }
-          if (vBig)   { vBig.x   -= nx * 120; vBig.y   -= ny * 120; }
-          continue;
+          const dmgToB = Math.max(1, Math.floor(atkA * mag - defB * 0.5));
+          const dmgToA = Math.max(1, Math.floor(atkB * (1 / mag) - defA * 0.5));
+
+          hpB.hp = Math.max(0, hpB.hp - dmgToB);
+          hpA.hp = Math.max(0, hpA.hp - dmgToA);
+
+          addFloater(pb.x, pb.y, `-${dmgToB}`, '#ff5252');
+          addFloater(pp.x, pp.y, `-${dmgToA}`, '#ff5252');
+
+          // efect vizual mic de absorbție către cel mai mare
+          const big: Entity = pr > rb.r ? pe : other;
+          const small: Entity = big === pe ? other : pe;
+          const areaBig = rToArea(w.rad.get(big)!.r);
+          const areaSmall = rToArea(w.rad.get(small)!.r);
+          const newArea = areaBig + areaSmall * ABSORB_FACTOR * 0.5;
+          w.rad.get(big)!.r = areaToR(newArea);
         }
 
-        // absorbție normală
-        const areaBig   = rToArea(w.rad.get(big)!.r);
-        const areaSmall = rToArea(w.rad.get(small)!.r);
-        const newArea   = areaBig + areaSmall * ABSORB_FACTOR;
-
-        w.rad.get(big)!.r = Math.min(areaToR(newArea), RADIUS_CAP);
-
-        const scorer    = w.player.get(big)!;
-        const bonusHere = inHotspot(w.pos.get(big)!.x, w.pos.get(big)!.y) ? HOTSPOT.BONUS_MULT : 1;
-        const gainedPvP = 10 * bonusHere;
-        scorer.score += gainedPvP;
-        addCountryPoints(scorer.country, gainedPvP);
-
-        // kill feed
-        pushFeed(`${scorer.id} ate ${w.player.get(small)!.id}`);
-
-        // floater + ping roșu la locul coliziunii
-        const mx = (pp.x + pb.x) / 2;
-        const my = (pp.y + pb.y) / 2;
-        const tag = bonusHere > 1 ? `+${gainedPvP} x2` : `+${gainedPvP}`;
-        addFloater(mx, my, tag, '#ff5252');
-        addPing(mx, my, '#ff5252');
+        // verificăm morți
+        if (hpDead(w, other)) {
+          const scorer = pla;
+          scorer.score += 12;
+          addCountryPoints(scorer.country, 12);
+          pushFeed(`${scorer.id} eliminated ${w.player.get(other)!.id}`);
+          removeEntity(w, other);
+          addPing(pb.x, pb.y, '#ff5252');
+        }
+        if (hpDead(w, pe)) {
+          const scorer = plb;
+          scorer.score += 12;
+          addCountryPoints(scorer.country, 12);
+          pushFeed(`${scorer.id} eliminated ${pla.id}`);
+          removeEntity(w, pe);
+          addPing(pp.x, pp.y, '#ff5252');
+        }
 
         if (settings.sound) SFX.absorb();
         if (settings.haptics && 'vibrate' in navigator) navigator.vibrate?.([12, 50]);
-
-        // marcăm "small" ca mort și îl scoatem
-        const smallWasBot = !!w.player.get(small)?.isBot;
-        removeEntity(w, small);
-        if (smallWasBot) onBotKilled(w, small); // respawn bot
       }
     }
+
+    // combo timer decay
+    pla.comboT = Math.max(0, (pla.comboT || 0) - 1 / 60);
   });
+}
+
+function hpDead(w: World, e: Entity): boolean {
+  const h = w.health.get(e);
+  const pl = w.player.get(e);
+  if (!h || !pl) return false;
+  if (h.hp <= 0) {
+    pl.alive = false;
+    return true;
+  }
+  return false;
 }
