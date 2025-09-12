@@ -39,19 +39,6 @@ export default function Home(): React.ReactElement {
 
   return (
     <>
-      {/* SEO Meta Tags */}
-      <head>
-        <title>Blobeer - Multiplayer Arena Battle Game | Free Online .io Game</title>
-        <meta name="description" content="Play Blobeer, the ultimate multiplayer arena battle game. Grow, fight, and dominate in this fast-paced .io game with power-ups, boss battles, and free cosmetics." />
-        <meta name="keywords" content="blobeer, multiplayer game, arena battle, .io game, online game, free game, battle royale, neon game" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta property="og:title" content="Blobeer - Multiplayer Arena Battle Game" />
-        <meta property="og:description" content="Join the ultimate neon arena experience. Fast-paced multiplayer action with power-ups, boss battles, and free customization." />
-        <meta property="og:type" content="website" />
-        <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content="Blobeer - Multiplayer Arena Battle Game" />
-        <meta name="twitter:description" content="The ultimate multiplayer .io arena experience. Play now for free!" />
-      </head>
       
       <div className="min-h-[100dvh] bg-[#070b16] text-white">
       {/* SIMPLE GRID - PĂTRĂȚELE VIZIBILE */}
@@ -270,37 +257,51 @@ export default function Home(): React.ReactElement {
                 </div>
 
                 {/* Top Countries */}
-                <div className="absolute inset-x-0 bottom-0 grid grid-cols-4 gap-3 p-6">
-                  {loading ? (
-                    <div className="col-span-4 flex items-center justify-center rounded-lg bg-black/40 p-6 ring-1 ring-white/10">
-                      <div className="text-sm text-white/60">Loading countries...</div>
+                <div className="absolute inset-x-0 bottom-0 p-6">
+                  <div className="mb-3 text-center">
+                    <div className="inline-flex items-center gap-2 rounded-full bg-black/60 px-4 py-2 ring-1 ring-white/20 backdrop-blur-sm">
+                      <Crown className="w-4 h-4 text-yellow-400" />
+                      <span className="text-sm font-semibold text-white/90">Top Countries</span>
                     </div>
-                  ) : topCountries.length > 0 ? (
-                    topCountries.map((country, i) => {
-                      const colors = ['text-blue-300', 'text-yellow-300', 'text-red-300', 'text-pink-300'];
-                      return (
-                        <div key={country.country_code} className="rounded-lg bg-black/40 p-3 ring-1 ring-white/10">
-                          <div className="flex items-center gap-2 text-xs text-white/60 mb-1">
-                            <span className="text-lg">{flagEmoji(country.country_code)}</span>
-                            <span>{COUNTRY_NAMES[country.country_code] || country.country_code}</span>
+                  </div>
+                  
+                  <div className="grid grid-cols-4 gap-3">
+                    {loading ? (
+                      <div className="col-span-4 flex items-center justify-center rounded-lg bg-black/40 p-6 ring-1 ring-white/10">
+                        <div className="text-sm text-white/60">Loading countries...</div>
+                      </div>
+                    ) : topCountries.length > 0 ? (
+                      topCountries.map((country, i) => {
+                        const colors = ['text-blue-300', 'text-yellow-300', 'text-red-300', 'text-pink-300'];
+                        const bgColors = ['bg-blue-500/20', 'bg-yellow-500/20', 'bg-red-500/20', 'bg-pink-500/20'];
+                        const ringColors = ['ring-blue-400/30', 'ring-yellow-400/30', 'ring-red-400/30', 'ring-pink-400/30'];
+                        return (
+                          <div key={country.country_code} className={`rounded-lg ${bgColors[i]} p-3 ring-1 ${ringColors[i]} backdrop-blur-sm`}>
+                            <div className="flex items-center gap-2 text-xs text-white/70 mb-2">
+                              <span className="text-lg">{flagEmoji(country.country_code)}</span>
+                              <span className="font-medium">{COUNTRY_NAMES[country.country_code] || country.country_code}</span>
+                            </div>
+                            <div className={`text-lg font-bold ${colors[i]}`}>
+                              {(country.points / 1000000).toFixed(1)}M
+                            </div>
+                            <div className="text-xs text-white/50 mt-1">
+                              #{i + 1} place
+                            </div>
                           </div>
-                          <div className={`text-lg font-bold ${colors[i]}`}>
-                            {(country.points / 1000000).toFixed(1)}M
-                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="col-span-4 flex flex-col items-center justify-center rounded-lg bg-black/40 p-6 ring-1 ring-white/10 text-center">
+                        <div className="text-lg font-bold text-white/90 mb-2">🌍 Global Arena Awaits!</div>
+                        <div className="text-sm text-white/60 mb-3">
+                          Not enough countries yet. Be the first to represent your nation!
                         </div>
-                      );
-                    })
-                  ) : (
-                    <div className="col-span-4 flex flex-col items-center justify-center rounded-lg bg-black/40 p-6 ring-1 ring-white/10 text-center">
-                      <div className="text-lg font-bold text-white/90 mb-2">🌍 Global Arena Awaits!</div>
-                      <div className="text-sm text-white/60 mb-3">
-                        Not enough countries yet. Be the first to represent your nation!
+                        <div className="text-xs text-white/50">
+                          Sign up and fight for your country&apos;s glory
+                        </div>
                       </div>
-                      <div className="text-xs text-white/50">
-                        Sign up and fight for your country&apos;s glory
-                      </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
 
                 {/* Hover effect */}
