@@ -9,20 +9,28 @@ export interface Player {
   id: string;
   country?: string;
   isBot?: boolean;
+
+  // abilități/temporizatoare
   ability: 'dash' | 'shield';
-  cooldown: number;       // dash cd (sec)
-  invuln?: number;        // invuln pe respawn
+  cooldown: number;
+  invuln?: number;
+  fireCD?: number;
+
+  // scor & stare
   score: number;
   alive: boolean;
 
   // combo
-  combo?: number;         // 1..3
-  comboT?: number;        // sec
+  combo?: number;
+  comboT?: number;
 
   // power-ups
-  magnetT?: number;       // sec rămas (atrage particule)
-  shieldT?: number;       // sec rămas (nu poate fi absorbit)
-  fireCD?: number;        // sec până poate trage din nou
+  magnetT?: number;
+  shieldT?: number;
+
+  // === STATS noi ===
+  attack: number;     // baza de damage a jucătorului
+  defense: number;    // reducere de damage a jucătorului
 }
 
 export type ParticleKind = 'normal' | 'super' | 'boss';
@@ -33,16 +41,27 @@ export interface Particle {
 }
 
 export type PowerUpKind = 'magnet' | 'shield';
-
 export interface PowerUp {
   kind: PowerUpKind;
-  ttl: number; // despawn timer (sec)
+  ttl: number;
 }
 
 export interface Bullet {
   owner: Entity;
-  dmg: number;   // “aria echivalentă” pe care o scade
+  dmg: number;   // damage de bază al proiectilului
   life: number;  // secunde
+}
+
+export type SupplyDrop = {
+  ttl: number;
+  loot: 'magnet' | 'shield' | 'shards';
+  amount?: number;
+};
+
+/** === Componentă nouă: HEALTH === */
+export interface Health {
+  hp: number;
+  maxHp: number;
 }
 
 export interface World {
@@ -56,10 +75,5 @@ export interface World {
   powerup: Map<Entity, PowerUp>;
   bullet: Map<Entity, Bullet>;
   supply: Map<Entity, SupplyDrop>;
+  health: Map<Entity, Health>;   // <— NOU
 }
-
-export type SupplyDrop = {
-  ttl: number;
-  loot: 'magnet' | 'shield' | 'shards';
-  amount?: number; // for shards
-};

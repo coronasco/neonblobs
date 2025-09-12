@@ -1,3 +1,4 @@
+// lib/ecs/systems/collisions.ts
 import type { World, Entity, Particle } from '../types';
 import { removeEntity } from '../world';
 import { areaToR, rToArea } from '@/lib/math';
@@ -7,11 +8,12 @@ import { HOTSPOTS, HOTSPOT } from '@/lib/config';
 import { SFX } from '@/lib/audio/sfx';
 import { useSettings } from '@/lib/state/useSettings';
 import { addFloater, addPing } from '@/lib/ui/effects';
+import { onBotKilled } from './ai';
 
 const ABSORB_FACTOR = 0.65;
-const RADIUS_CAP = 180;
-const EPS = 1e-3;
-const COMBO_WINDOW = 2.0; // secunde pentru combo în hotspot
+const RADIUS_CAP    = 180;
+const EPS           = 1e-3;
+const COMBO_WINDOW  = 2.0; // secunde pentru combo în hotspot
 
 function inHotspot(x: number, y: number): boolean {
   for (const h of HOTSPOTS) {
@@ -24,8 +26,8 @@ function inHotspot(x: number, y: number): boolean {
 export function collisionSystem(w: World): void {
   const grid = buildGrid(w, 64);
   const addCountryPoints = useGameStore.getState().addCountryPoints;
-  const pushFeed = useGameStore.getState().pushFeed;
-  const settings = useSettings.getState();
+  const pushFeed         = useGameStore.getState().pushFeed;
+  const settings         = useSettings.getState();
 
   w.player.forEach((pla, pe) => {
     if (!pla.alive || !w.pos.has(pe) || !w.rad.has(pe)) return;
@@ -46,7 +48,8 @@ export function collisionSystem(w: World): void {
 
       // ---------- PLAYER vs PARTICLE ----------
       if (w.particle.has(other)) {
-        const fp = w.pos.get(other); const fr = w.rad.get(other);
+        const fp = w.pos.get(other);
+        const fr = w.rad.get(other);
         if (!fp || !fr) continue;
 
         const dx = pp.x - fp.x, dy = pp.y - fp.y;
@@ -72,7 +75,7 @@ export function collisionSystem(w: World): void {
           const newArea = rToArea(pr) + rToArea(fr.r) * 0.08;
           w.rad.get(pe)!.r = Math.min(areaToR(newArea), RADIUS_CAP);
 
-          // Floater & ping în funcție de tipul particulei
+          // Floater & ping
           if (pInfo.kind === 'super' || pInfo.kind === 'boss') {
             const parts = [`+${gained}`, pInfo.kind === 'boss' ? 'BOSS' : 'SUPER'];
             if (hotspotMult > 1) parts.push('x2');
@@ -87,6 +90,7 @@ export function collisionSystem(w: World): void {
             addFloater(fp.x, fp.y, parts.join(' '), '#00e5ff');
             if (settings.sound) SFX.pickup();
           }
+
           if (settings.haptics && 'vibrate' in navigator) navigator.vibrate?.(10);
         }
 
@@ -102,7 +106,8 @@ export function collisionSystem(w: World): void {
         // invulnerabilitate (respawn shield) – ignoră
         if ((pla.invuln && pla.invuln > 0) || (plb.invuln && plb.invuln > 0)) continue;
 
-        const pb = w.pos.get(other); const rb = w.rad.get(other);
+        const pb = w.pos.get(other);
+        const rb = w.rad.get(other);
         if (!pb || !rb) continue;
 
         const dx = pp.x - pb.x, dy = pp.y - pb.y;
@@ -124,30 +129,32 @@ export function collisionSystem(w: World): void {
         }
 
         // determină cine e mare/mic
-        const big: Entity = pr > rb.r ? pe : other;
+        const big: Entity   = pr > rb.r ? pe : other;
         const small: Entity = big === pe ? other : pe;
 
-        // dacă cel mic are SHIELD activ → respingere mai puternică și STOP
+        // dacă cel mic are SHIELD activ → respingere + STOP
         const smallPl = w.player.get(small);
         if (smallPl && smallPl.shieldT && smallPl.shieldT > 0) {
-          const vSmall = w.vel.get(small), vBig = w.vel.get(big);
-          const pSmall = w.pos.get(small)!, pBig = w.pos.get(big)!;
+          const vSmall = w.vel.get(small);
+          const vBig   = w.vel.get(big);
+          const pSmall = w.pos.get(small)!;
+          const pBig   = w.pos.get(big)!;
           const dx2 = pSmall.x - pBig.x, dy2 = pSmall.y - pBig.y;
-          const d2 = Math.hypot(dx2, dy2) || 1;
-          const nx = dx2 / d2, ny = dy2 / d2;
+          const d2  = Math.hypot(dx2, dy2) || 1;
+          const nx  = dx2 / d2, ny = dy2 / d2;
           if (vSmall) { vSmall.x += nx * 220; vSmall.y += ny * 220; }
-          if (vBig) { vBig.x -= nx * 120; vBig.y -= ny * 120; }
-          continue; // nu se absoarbe
+          if (vBig)   { vBig.x   -= nx * 120; vBig.y   -= ny * 120; }
+          continue;
         }
 
         // absorbție normală
-        const areaBig = rToArea(w.rad.get(big)!.r);
+        const areaBig   = rToArea(w.rad.get(big)!.r);
         const areaSmall = rToArea(w.rad.get(small)!.r);
-        const newArea = areaBig + areaSmall * ABSORB_FACTOR;
+        const newArea   = areaBig + areaSmall * ABSORB_FACTOR;
 
         w.rad.get(big)!.r = Math.min(areaToR(newArea), RADIUS_CAP);
 
-        const scorer = w.player.get(big)!;
+        const scorer    = w.player.get(big)!;
         const bonusHere = inHotspot(w.pos.get(big)!.x, w.pos.get(big)!.y) ? HOTSPOT.BONUS_MULT : 1;
         const gainedPvP = 10 * bonusHere;
         scorer.score += gainedPvP;
@@ -166,7 +173,10 @@ export function collisionSystem(w: World): void {
         if (settings.sound) SFX.absorb();
         if (settings.haptics && 'vibrate' in navigator) navigator.vibrate?.([12, 50]);
 
+        // marcăm "small" ca mort și îl scoatem
+        const smallWasBot = !!w.player.get(small)?.isBot;
         removeEntity(w, small);
+        if (smallWasBot) onBotKilled(w, small); // respawn bot
       }
     }
   });

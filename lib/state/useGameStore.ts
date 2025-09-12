@@ -8,6 +8,10 @@ interface UIState {
   leaderboard: Array<{ name: string; score: number }>;
   dashCooldown?: number;   // 0..1 (0 = gata)
   combo?: number;          // 1..3
+  hp?: number;
+  maxHp?: number;
+  attack?: number;
+  defense?: number;
 }
 
 type FeedItem = { id: number; text: string; t: number }; // t sec până dispare

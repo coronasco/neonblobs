@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import GameCanvas from '@/components/gameCanvas';
+import Hud from '@/components/hud';
 import { useAuth } from '@/lib/auth/SupabaseProvider';
 import { useGameStore } from '@/lib/state/useGameStore';
 import { enqueueCountryDelta } from '@/lib/countryScore';
@@ -11,22 +12,21 @@ import CountryLeaderboard from '@/components/CountryLeaderboard';
 import { flagEmoji } from '@/lib/countries';
 import { supabase } from '@/lib/supabaseClient';
 import { LogIn, Flag, Globe2, ShoppingBag, User2 } from 'lucide-react';
+import { useProgress } from '@/lib/state/useProgress';
 
 export default function PlayPage(): React.ReactElement {
   const { session } = useAuth();
   const userId = session?.user?.id ?? null;
 
-  // Score din HUD (setat de GameCanvas prin setUI)
   const score = useGameStore((s) => s.ui.score ?? 0);
-
-  // Țara din store (opțională) + setter
   const country = useGameStore((s) => s.country);
   const setCountry = useGameStore((s) => s.setCountry);
 
   const [openCountry, setOpenCountry] = useState(false);
   const prevScoreRef = useRef<number>(0);
 
-  // 1) La mount: ia țara din profil (user) sau din localStorage (guest)
+  const { addXp, hydrate: hydrateProgress } = useProgress();
+
   useEffect(() => {
     (async () => {
       if (userId) {
@@ -43,7 +43,25 @@ export default function PlayPage(): React.ReactElement {
     })().catch(() => {});
   }, [userId, setCountry]);
 
-  // 2) Trimite delta de scor către leaderboard (doar userii logați contează)
+  useEffect(() => {
+    // hidratează la intrare (doar pentru userii logați)
+    void hydrateProgress();
+  }, [hydrateProgress]);
+  
+  useEffect(() => {
+    const delta = Math.max(0, Math.floor(score - (prevScoreRef.current || 0)));
+    prevScoreRef.current = score;
+  
+    if (delta > 0) {
+      // leaderboard doar pentru user logat
+      if (userId) {
+        void enqueueCountryDelta(userId, delta);
+        // XP: 1 XP / 10 puncte (poți schimba raportul)
+        void addXp(Math.floor(delta / 10));
+      }
+    }
+  }, [score, userId, addXp]);
+
   useEffect(() => {
     const delta = Math.max(0, Math.floor(score - (prevScoreRef.current || 0)));
     prevScoreRef.current = score;
@@ -64,10 +82,7 @@ export default function PlayPage(): React.ReactElement {
         <div className="mx-auto flex w-full max-w-7xl items-center justify-between px-4 py-3">
           {/* Stânga: Back + Shop */}
           <div className="flex items-center gap-2">
-            <Link
-              href="/"
-              className="rounded-lg px-3 py-1.5 text-sm text-white/80 hover:bg-white/10 hover:text-white"
-            >
+            <Link href="/" className="rounded-lg px-3 py-1.5 text-sm text-white/80 hover:bg-white/10 hover:text-white">
               ← Back
             </Link>
             <Link
@@ -132,11 +147,13 @@ export default function PlayPage(): React.ReactElement {
         </div>
       )}
 
-      {/* LAYOUT: Canvas sus, carduri dedesubt (nu în dreapta). Pe desktop: două coloane sub canvas. */}
+      {/* MAIN */}
       <main className="mx-auto w-full max-w-7xl px-4 pb-10">
-        {/* Canvas card */}
-        <section className="rounded-2xl border border-white/10 bg-white/5 p-2">
+        {/* Canvas + HUD suprapus */}
+        <section className="relative mt-6 rounded-2xl border border-white/10 bg-white/5 p-2">
+          <Hud /> {/* <- HUD e în același container, overlay absolut */}
           <GameCanvas />
+          
         </section>
 
         {/* Cards sub canvas */}

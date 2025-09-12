@@ -1,6 +1,9 @@
 'use client';
 import React, { useEffect, useRef } from 'react';
-import { GAME, HOTSPOTS, HOTSPOT, MAP, UI_FONT } from '@/lib/config';
+import { joinGlobalRoom, makeGuestId, type NetState } from '@/lib/realtime/room';
+import { supabase } from '@/lib/supabaseClient';
+import { useAuth } from '@/lib/auth/SupabaseProvider';
+import { HOTSPOTS, HOTSPOT, MAP, UI_FONT, GAME } from '@/lib/config';
 import { createWorld } from '@/lib/ecs/world';
 import { spawnParticles, spawnPlayer, findSafeSpawn } from '@/lib/ecs/systems/spawn';
 import { movementSystem } from '@/lib/ecs/systems/movement';
@@ -12,14 +15,18 @@ import { superEventSystem } from '@/lib/ecs/systems/events';
 import { powerupSystem } from '@/lib/ecs/systems/powerups';
 import { bossSystem } from '@/lib/ecs/systems/boss';
 import { bulletsSystem, tryFire } from '@/lib/ecs/systems/bullets';
+import { supplySystem, initSupplyTimer } from '@/lib/ecs/systems/supply';
 import { useGameStore } from '@/lib/state/useGameStore';
 import { useSettings } from '@/lib/state/useSettings';
 import { SFX } from '@/lib/audio/sfx';
-import { getFloaters, updateFloaters, getPings, updatePings, getHits, updateHits, getShake, updateShake } from '@/lib/ui/effects';
+import {
+  getFloaters, updateFloaters,
+  getPings, updatePings,
+  getHits, updateHits,
+  getShake, updateShake
+} from '@/lib/ui/effects';
 import { useCosmetics } from '@/lib/state/useCosmetics';
 import type { World, Entity, Particle, PowerUp, Bullet } from '@/lib/ecs/types';
-import { supplySystem, initSupplyTimer } from '@/lib/ecs/systems/supply';
-import { SUPPLY } from '@/lib/config';
 
 const SPEED = 140;
 const GRID_STEP = 40;
@@ -41,10 +48,16 @@ export default function GameCanvas(): React.ReactElement {
   const setUI = useGameStore((s) => s.setUI);
   const country = useGameStore((s) => s.country);
 
-  const { equipped } = useCosmetics();
+  // responsive view state
+  const ASPECT = 16 / 9;
+  const viewRef = useRef<{ w: number; h: number; dpr: number }>({ w: 1280, h: 720, dpr: 1 });
 
+  const { equipped } = useCosmetics();
   const outlineId = equipped.outline ?? 'cyan';
   const trailId = equipped.trail ?? 'neon';
+
+  const { session } = useAuth();
+  const userKey = useRef<string>(session?.user?.id ?? makeGuestId());
 
   const inputRef = useRef<{ up: boolean; down: boolean; left: boolean; right: boolean; dash: boolean; fire: boolean; mx: number; my: number; mouseInside: boolean; }>({
     up: false, down: false, left: false, right: false, dash: false, fire: false, mx: 0, my: 0, mouseInside: false,
@@ -64,17 +77,47 @@ export default function GameCanvas(): React.ReactElement {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    canvas.width = GAME.WIDTH * dpr;
-    canvas.height = GAME.HEIGHT * dpr;
-    canvas.style.width = `${GAME.WIDTH}px`;
-    canvas.style.height = `${GAME.HEIGHT}px`;
+    function resizeCanvas() {
+      if (!canvas) return;
+      // 1) lățimea disponibilă (container)
+      const parent = canvas.parentElement as HTMLElement | null;
+      const maxW = parent?.clientWidth ?? window.innerWidth;
+      // 2) dimensiune CSS cu aspect fix
+      let cssW = Math.max(320, Math.floor(maxW));
+      let cssH = Math.floor(cssW / ASPECT);
+      // 3) limitează înălțimea la viewport - ~200px (spațiu pentru UI)
+      const maxH = Math.max(220, Math.floor(window.innerHeight - 200));
+      if (cssH > maxH) {
+        cssH = maxH;
+        cssW = Math.floor(cssH * ASPECT);
+      }
+      // 4) DPR
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      // 5) dimensiune CSS
+      canvas.style.width = `${cssW}px`;
+      canvas.style.height = `${cssH}px`;
+      // 6) buffer intern
+      canvas.width = Math.floor(cssW * dpr);
+      canvas.height = Math.floor(cssH * dpr);
+      // 7) scale context
+      const ctxRaw = canvas.getContext('2d', { alpha: true });
+      if (!ctxRaw) return;
+      const ctx = ctxRaw as CanvasRenderingContext2D;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.scale(dpr, dpr);
+      // 8) memorează
+      viewRef.current = { w: cssW, h: cssH, dpr };
+    }
 
+    // inițializează context + resize
     const ctxRaw = canvas.getContext('2d', { alpha: true });
     if (!ctxRaw) return;
-    const ctx = ctxRaw as CanvasRenderingContext2D;
-    ctx.scale(dpr, dpr);
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
 
+    const ctx = ctxRaw as CanvasRenderingContext2D;
+
+    // === World & entities ====================================================
     const w: World = createWorld();
     spawnParticles(w);
     initSupplyTimer();
@@ -86,11 +129,83 @@ export default function GameCanvas(): React.ReactElement {
     const randC = () => bots[Math.floor(Math.random() * bots.length)];
     for (let i = 0; i < 16; i++) spawnPlayer(w, `bot-${i}`, true, rBetween(12, 22), randC());
 
-    const startP = w.pos.get(me)!;
-    camRef.current.x = clamp(startP.x - GAME.WIDTH / 2, 0, Math.max(0, MAP.WIDTH - GAME.WIDTH));
-    camRef.current.y = clamp(startP.y - GAME.HEIGHT / 2, 0, Math.max(0, MAP.HEIGHT - GAME.HEIGHT));
-    camTargetRef.current = { ...camRef.current };
+    // camera inițială
+    {
+      const { w: VW, h: VH } = viewRef.current;
+      const startP = w.pos.get(me)!;
+      camRef.current.x = clamp(startP.x - VW / 2, 0, Math.max(0, MAP.WIDTH - VW));
+      camRef.current.y = clamp(startP.y - VH / 2, 0, Math.max(0, MAP.HEIGHT - VH));
+      camTargetRef.current = { ...camRef.current };
+    }
 
+    // === Realtime (global room) =============================================
+    const ghosts = new Map<string, Entity>(); // netId -> entity
+    const ch = joinGlobalRoom(userKey.current);
+    let emitTimer: number | null = null;
+
+    const startEmitLoop = () => {
+      if (emitTimer) return;
+      const EMIT_HZ = 20;
+      emitTimer = window.setInterval(() => {
+        const p = w.pos.get(me); const r = w.rad.get(me); const pl = w.player.get(me);
+        if (!p || !r || !pl) return;
+        const msg: NetState = {
+          id: userKey.current,
+          x: p.x, y: p.y, r: r.r,
+          score: pl.score,
+          country,
+          t: performance.now(),
+        };
+        ch.send({ type: 'broadcast', event: 'state', payload: msg });
+      }, 1000 / EMIT_HZ);
+    };
+
+    const stopEmitLoop = () => {
+      if (emitTimer) { clearInterval(emitTimer); emitTimer = null; }
+    };
+
+    ch.on('broadcast', { event: 'state' }, (payload) => {
+      const ns = payload.payload as NetState;
+      if (!ns || ns.id === userKey.current) return;
+
+      const eid = ghosts.get(ns.id);
+      if (!eid) {
+        const e = (w.nextId++);
+        w.pos.set(e, { x: ns.x, y: ns.y });
+        w.vel.set(e, { x: 0, y: 0 });
+        w.rad.set(e, { r: ns.r });
+        w.col.set(e, { a: 0.6, b: 0.6, g: 1 });
+        w.player.set(e, {
+          id: ns.id.slice(0, 6),
+          isBot: false,
+          country: ns.country,
+          ability: 'dash',
+          cooldown: 0,
+          invuln: 0,
+          score: ns.score,
+          alive: true,
+          combo: 1,
+          comboT: 0,
+          attack: 0,   // Adăugat pentru a satisface tipul Player
+          defense: 0,  // Adăugat pentru a satisface tipul Player
+        });
+        ghosts.set(ns.id, e);
+      } else {
+        const p = w.pos.get(eid); const r = w.rad.get(eid); const pl = w.player.get(eid);
+        if (p) { p.x = ns.x; p.y = ns.y; }
+        if (r) { r.r = ns.r; }
+        if (pl) { pl.score = ns.score; }
+      }
+    });
+
+    ch.subscribe(async (status) => {
+      if (status === 'SUBSCRIBED') {
+        await ch.track({ online_at: Date.now() });
+        startEmitLoop();
+      }
+    });
+
+    // === Loop ================================================================
     let last = performance.now();
     let raf = 0;
     let accumulator = 0;
@@ -136,22 +251,24 @@ export default function GameCanvas(): React.ReactElement {
     canvas.addEventListener('contextmenu', preventContext);
 
     const respawnMe = (): void => {
+      const { w: VW, h: VH } = viewRef.current;
       const spot = findSafeSpawn(w);
       me = spawnPlayer(w, 'me', false, undefined, country);
       const p = w.pos.get(me);
       if (p) { p.x = spot.x; p.y = spot.y; }
       const pl = w.player.get(me);
       if (pl) { pl.invuln = 1.0; pl.combo = 1; pl.comboT = 0; }
-      camRef.current.x = clamp(p!.x - GAME.WIDTH / 2, 0, MAP.WIDTH - GAME.WIDTH);
-      camRef.current.y = clamp(p!.y - GAME.HEIGHT / 2, 0, MAP.HEIGHT - GAME.HEIGHT);
+      camRef.current.x = clamp(p!.x - VW / 2, 0, MAP.WIDTH - VW);
+      camRef.current.y = clamp(p!.y - VH / 2, 0, MAP.HEIGHT - VH);
       camTargetRef.current = { ...camRef.current };
       trailRef.current = [];
     };
 
     function updateCamera(): void {
+      const { w: VW, h: VH } = viewRef.current;
       const p = w.pos.get(me); if (!p) return;
-      camTargetRef.current.x = clamp(p.x - GAME.WIDTH / 2, 0, Math.max(0, MAP.WIDTH - GAME.WIDTH));
-      camTargetRef.current.y = clamp(p.y - GAME.HEIGHT / 2, 0, Math.max(0, MAP.HEIGHT - GAME.HEIGHT));
+      camTargetRef.current.x = clamp(p.x - VW / 2, 0, Math.max(0, MAP.WIDTH - VW));
+      camTargetRef.current.y = clamp(p.y - VH / 2, 0, Math.max(0, MAP.HEIGHT - VH));
       const SMOOTH = 0.12;
       camRef.current.x = lerp(camRef.current.x, camTargetRef.current.x, SMOOTH);
       camRef.current.y = lerp(camRef.current.y, camTargetRef.current.y, SMOOTH);
@@ -229,10 +346,16 @@ export default function GameCanvas(): React.ReactElement {
         if (trailRef.current.length > 36) trailRef.current.shift();
       }
 
+      const hpC = w.health.get(me);
+
       setUI({
         score: meNow.score,
         dashCooldown: Math.min(1, Math.max(0, meNow.cooldown)),
         combo: Math.max(1, meNow.combo ?? 1),
+        hp: hpC?.hp ?? 0,
+        maxHp: hpC?.maxHp ?? 0,
+        attack: meNow.attack,
+        defense: meNow.defense,
       });
 
       updateCamera();
@@ -240,9 +363,10 @@ export default function GameCanvas(): React.ReactElement {
     }
 
     function render(): void {
+      const { w: VW, h: VH } = viewRef.current;
       const camX = camRef.current.x, camY = camRef.current.y;
 
-      // screen shake — mic offset random în funcție de intensitate
+      // screen shake
       const shake = getShake();
       const shakeX = shake > 0 ? (Math.random() - 0.5) * 12 * shake : 0;
       const shakeY = shake > 0 ? (Math.random() - 0.5) * 12 * shake : 0;
@@ -250,19 +374,19 @@ export default function GameCanvas(): React.ReactElement {
       const rCamY = camY + shakeY;
 
       // bg
-      ctx.clearRect(0, 0, GAME.WIDTH, GAME.HEIGHT);
+      ctx.clearRect(0, 0, VW, VH);
       ctx.fillStyle = '#0a0f1f';
-      ctx.fillRect(0, 0, GAME.WIDTH, GAME.HEIGHT);
+      ctx.fillRect(0, 0, VW, VH);
 
       // grid
       ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 1;
       const startX = Math.floor(rCamX / GRID_STEP) * GRID_STEP;
       const startY = Math.floor(rCamY / GRID_STEP) * GRID_STEP;
-      for (let x = startX; x <= rCamX + GAME.WIDTH; x += GRID_STEP) {
-      const sx = Math.floor(x - rCamX) + 0.5; ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, GAME.HEIGHT); ctx.stroke();
+      for (let x = startX; x <= rCamX + VW; x += GRID_STEP) {
+        const sx = Math.floor(x - rCamX) + 0.5; ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, VH); ctx.stroke();
       }
-      for (let y = startY; y <= rCamY + GAME.HEIGHT; y += GRID_STEP) {
-        const sy = Math.floor(y - rCamY) + 0.5; ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(GAME.WIDTH, sy); ctx.stroke();
+      for (let y = startY; y <= rCamY + VH; y += GRID_STEP) {
+        const sy = Math.floor(y - rCamY) + 0.5; ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(VW, sy); ctx.stroke();
       }
 
       // bounds
@@ -272,7 +396,7 @@ export default function GameCanvas(): React.ReactElement {
       // hotspots
       HOTSPOTS.forEach((h) => {
         const hx = h.x - rCamX, hy = h.y - rCamY;
-        if (hx + h.r < 0 || hy + h.r < 0 || hx - h.r > GAME.WIDTH || hy - h.r > GAME.HEIGHT) return;
+        if (hx + h.r < 0 || hy + h.r < 0 || hx - h.r > VW || hy - h.r > VH) return;
         const grad = ctx.createRadialGradient(hx, hy, 0, hx, hy, h.r);
         grad.addColorStop(0, 'rgba(255,215,0,0.22)'); grad.addColorStop(1, 'rgba(255,215,0,0)');
         ctx.fillStyle = grad; ctx.beginPath(); ctx.arc(hx, hy, h.r, 0, Math.PI * 2); ctx.fill();
@@ -283,7 +407,7 @@ export default function GameCanvas(): React.ReactElement {
       w.particle.forEach((part: Particle, e: Entity) => {
         const pos = w.pos.get(e)!; const r = w.rad.get(e)!.r; const c = w.col.get(e)!;
         const sx = pos.x - rCamX, sy = pos.y - rCamY;
-        if (sx + r < 0 || sy + r < 0 || sx - r > GAME.WIDTH || sy - r > GAME.HEIGHT) return;
+        if (sx + r < 0 || sy + r < 0 || sx - r > VW || sy - r > VH) return;
 
         if (part.kind === 'super' || part.kind === 'boss') {
           const t = performance.now() * 0.004;
@@ -298,11 +422,11 @@ export default function GameCanvas(): React.ReactElement {
         ctx.shadowBlur = 12; ctx.shadowColor = ctx.fillStyle as string; ctx.fill(); ctx.shadowBlur = 0;
       });
 
-      // power-ups (canvas)
+      // power-ups
       w.powerup.forEach((pu: PowerUp, e: Entity) => {
         const pos = w.pos.get(e)!; const r = w.rad.get(e)!.r;
         const sx = pos.x - rCamX, sy = pos.y - rCamY;
-        if (sx + r < 0 || sy + r < 0 || sx - r > GAME.WIDTH || sy - r > GAME.HEIGHT) return;
+        if (sx + r < 0 || sy + r < 0 || sx - r > VW || sy - r > VH) return;
         const t = performance.now() * 0.005;
         const pulse = 6 + Math.sin(t) * 4;
         const color = pu.kind === 'magnet' ? '0,229,255' : '255,215,0';
@@ -314,43 +438,37 @@ export default function GameCanvas(): React.ReactElement {
         ctx.fillStyle = '#0a0f1f'; ctx.fillText(pu.kind === 'magnet' ? 'M' : 'S', sx, sy);
       });
 
-      // SUPPLY DROPS — pulsing capsule
+      // SUPPLY DROPS
       w.supply.forEach((sup, e) => {
         const p = w.pos.get(e)!; const r = w.rad.get(e)!.r;
         const sx = p.x - rCamX, sy = p.y - rCamY;
-        if (sx + r < 0 || sy + r < 0 || sx - r > GAME.WIDTH || sy - r > GAME.HEIGHT) return;
+        if (sx + r < 0 || sy + r < 0 || sx - r > VW || sy - r > VH) return;
 
         const t = performance.now() * 0.006;
-        // halo pulse
         const halo = 8 + Math.sin(t) * 5;
         ctx.beginPath(); ctx.arc(sx, sy, r + halo, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(167,139,250,0.85)'; // purple
-        ctx.lineWidth = 3; ctx.stroke();
+        ctx.strokeStyle = 'rgba(167,139,250,0.85)'; ctx.lineWidth = 3; ctx.stroke();
 
-        // capsule body
         ctx.save();
         ctx.translate(sx, sy);
-        ctx.rotate(Math.sin(t*0.7) * 0.1);
+        ctx.rotate(Math.sin(t * 0.7) * 0.1);
         const wCap = r * 1.4, hCap = r * 1.8, radCap = 10;
-        roundRect(ctx, -wCap/2, -hCap/2, wCap, hCap, radCap);
-        const grad = ctx.createLinearGradient(0, -hCap/2, 0, hCap/2);
+        roundRect(ctx, -wCap / 2, -hCap / 2, wCap, hCap, radCap);
+        const grad = ctx.createLinearGradient(0, -hCap / 2, 0, hCap / 2);
         grad.addColorStop(0, 'rgba(167,139,250,0.95)');
         grad.addColorStop(1, 'rgba(0,229,255,0.95)');
         ctx.fillStyle = grad; ctx.fill();
-        // stripe
         ctx.fillStyle = 'rgba(255,255,255,0.7)';
-        ctx.fillRect(-wCap/2 + 4, -2, wCap - 8, 4);
+        ctx.fillRect(-wCap / 2 + 4, -2, wCap - 8, 4);
         ctx.restore();
 
-        // label
         ctx.font = UI_FONT.SMALL; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
         ctx.fillStyle = 'rgba(255,255,255,0.9)';
         ctx.fillText(sup.loot === 'shards' ? 'SHARDS' : (sup.loot === 'magnet' ? 'MAGNET' : 'SHIELD'), sx, sy + r + 6);
       });
 
-      // helper for capsule rectangle
       function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-        const rr = Math.min(r, w/2, h/2);
+        const rr = Math.min(r, w / 2, h / 2);
         ctx.beginPath();
         ctx.moveTo(x + rr, y);
         ctx.arcTo(x + w, y, x + w, y + h, rr);
@@ -360,21 +478,19 @@ export default function GameCanvas(): React.ReactElement {
         ctx.closePath();
       }
 
-
-      // TRAIL – stiluri multiple
+      // TRAIL
       drawTrailWithStyle(ctx, rCamX, rCamY, trailRef.current, trailId);
 
-      // players (cu skin outline)
+      // players
       w.player.forEach((pl, e) => {
         const pos = w.pos.get(e); const rad = w.rad.get(e); const col = w.col.get(e);
         if (!pos || !rad || !col || !pl.alive) return;
         const r = rad.r;
         const sx = pos.x - rCamX, sy = pos.y - rCamY;
-        if (sx + r < 0 || sy + r < 0 || sx - r > GAME.WIDTH || sy - r > GAME.HEIGHT) return;
+        if (sx + r < 0 || sy + r < 0 || sx - r > VW || sy - r > VH) return;
 
         const isMe = pl.id === 'me';
         if (!isMe) {
-          // adversari: simplu
           const fill = `rgba(${Math.floor(col.a * 255)}, ${Math.floor(col.b * 255)}, ${Math.floor(col.g * 255)}, 0.10)`;
           ctx.fillStyle = fill; ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2); ctx.fill();
           ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2);
@@ -383,7 +499,7 @@ export default function GameCanvas(): React.ReactElement {
           return;
         }
 
-        // player local cu skin
+        // local player
         drawPlayerWithSkin(ctx, sx, sy, r, outlineId, dashFlashRef.current);
 
         // label + shield
@@ -394,7 +510,7 @@ export default function GameCanvas(): React.ReactElement {
           ctx.strokeStyle = 'rgba(255,255,153,0.9)'; ctx.lineWidth = 3; ctx.stroke();
         }
 
-        // săgeată hotspot
+        // arrow to nearest hotspot
         let nearestDist = Infinity, nearestHX = 0, nearestHY = 0;
         for (const h of HOTSPOTS) {
           const dx = h.x - (sx + rCamX), dy = h.y - (sy + rCamY);
@@ -421,7 +537,7 @@ export default function GameCanvas(): React.ReactElement {
       // floaters
       getFloaters().forEach((f) => {
         const sx = f.x - rCamX, sy = f.y - rCamY - (1 - f.life) * 28;
-        if (sx < -20 || sy < -20 || sx > GAME.WIDTH + 20 || sy > GAME.HEIGHT + 20) return;
+        if (sx < -20 || sy < -20 || sx > VW + 20 || sy > VH + 20) return;
         const alpha = Math.min(1, f.life * 1.2);
         ctx.save(); ctx.globalAlpha = alpha;
         ctx.font = UI_FONT.MEDIUM; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
@@ -433,18 +549,18 @@ export default function GameCanvas(): React.ReactElement {
       const pArr = getPings();
       pArr.forEach((p) => {
         const sx = p.x - rCamX, sy = p.y - rCamY;
-        if (sx < -40 || sy < -40 || sx > GAME.WIDTH + 40 || sy > GAME.HEIGHT + 40) return;
+        if (sx < -40 || sy < -40 || sx > VW + 40 || sy > VH + 40) return;
         const t = 1 - p.life; const radius = 6 + t * 28;
         ctx.beginPath(); ctx.arc(sx, sy, radius, 0, Math.PI * 2);
         ctx.strokeStyle = p.color; ctx.globalAlpha = Math.max(0, 1 - t);
         ctx.lineWidth = 2; ctx.stroke(); ctx.globalAlpha = 1;
       });
 
-      // hit markers (X mic alb)
+      // hit markers
       getHits().forEach((h) => {
         const sx = h.x - rCamX, sy = h.y - rCamY;
-        const a = Math.max(0, h.life); // 0..0.35
-        if (sx < -20 || sy < -20 || sx > GAME.WIDTH + 20 || sy > GAME.HEIGHT + 20) return;
+        const a = Math.max(0, h.life);
+        if (sx < -20 || sy < -20 || sx > VW + 20 || sy > VH + 20) return;
         const len = 8 + (1 - a) * 6;
         const alpha = Math.min(1, a * 3);
         ctx.save();
@@ -456,10 +572,9 @@ export default function GameCanvas(): React.ReactElement {
         ctx.restore();
       });
 
-
       // minimap
       const MW = 200, MH = Math.floor((MAP.HEIGHT / MAP.WIDTH) * MW);
-      const mx = GAME.WIDTH - MW - 12, my = GAME.HEIGHT - MH - 12;
+      const mx = VW - MW - 12, my = VH - MH - 12;
       ctx.fillStyle = 'rgba(10,15,31,0.9)'; ctx.fillRect(mx, my, MW, MH);
       ctx.strokeStyle = 'rgba(255,255,255,0.12)'; ctx.strokeRect(mx + 0.5, my + 0.5, MW, MH);
 
@@ -484,8 +599,7 @@ export default function GameCanvas(): React.ReactElement {
         ctx.fillStyle = pl.id === 'me' ? 'rgba(0,229,255,1)' : 'rgba(255,255,255,0.9)'; ctx.fill();
       });
 
-      // supply drops on minimap
-      w.supply.forEach((sup, e) => {
+      w.supply.forEach((_sup, e) => {
         const pos = w.pos.get(e); if (!pos) return;
         const px = mx + (pos.x / MAP.WIDTH) * MW, py = my + (pos.y / MAP.HEIGHT) * MH;
         ctx.save(); ctx.translate(px, py); ctx.rotate(Math.PI / 4);
@@ -495,7 +609,7 @@ export default function GameCanvas(): React.ReactElement {
       });
 
       const vx = (rCamX / MAP.WIDTH) * MW, vy = (rCamY / MAP.HEIGHT) * MH;
-      const vw = (GAME.WIDTH / MAP.WIDTH) * MW, vh = (GAME.HEIGHT / MAP.HEIGHT) * MH;
+      const vw = (VW / MAP.WIDTH) * MW, vh = (VH / MAP.HEIGHT) * MH;
       ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1; ctx.strokeRect(mx + vx, my + vy, vw, vh);
     }
 
@@ -508,8 +622,12 @@ export default function GameCanvas(): React.ReactElement {
     };
     raf = requestAnimationFrame(loop);
 
+    // cleanup
     return () => {
       cancelAnimationFrame(raf);
+      stopEmitLoop();
+      supabase.removeChannel(ch);
+      window.removeEventListener('resize', resizeCanvas);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       canvas.removeEventListener('mousemove', handleMouseMove);
@@ -521,11 +639,11 @@ export default function GameCanvas(): React.ReactElement {
       delete document.body.dataset.magnet;
       delete document.body.dataset.shield;
     };
-  }, [setUI, country, soundOn, hapticsOn, equipped.outline, equipped.trail]);
+  }, [setUI, country, soundOn, hapticsOn, outlineId, trailId]);
 
   return (
-    <div className="relative mx-auto w-[1280px] select-none">
-      <canvas ref={canvasRef} className="block rounded-2xl shadow-2xl ring-1 ring-white/10" />
+    <div className="relative mx-auto w-full max-w-7xl select-none">
+      <canvas ref={canvasRef} className="block w-full h-auto rounded-2xl shadow-2xl ring-1 ring-white/10" />
     </div>
   );
 }
@@ -538,15 +656,11 @@ function drawPlayerWithSkin(
   outlineId: string,
   dashFlash: number
 ): void {
-  // umplutură discretă pentru player local (să vezi masa)
   ctx.fillStyle = 'rgba(255,255,255,0.06)';
   ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2); ctx.fill();
 
-  const baseColor = outlineHex(outlineId);
-
   switch (outlineId) {
     case 'neoRing': {
-      // 2-3 inele concentrice pulsante
       const t = performance.now() * 0.005;
       const rings = [0, 8, 16];
       rings.forEach((off, i) => {
@@ -560,7 +674,6 @@ function drawPlayerWithSkin(
       break;
     }
     case 'holoGlass': {
-      // sticlă holografică: gradient + highlight
       const grad = ctx.createRadialGradient(sx - r * 0.3, sy - r * 0.3, r * 0.2, sx, sy, r + 12);
       grad.addColorStop(0, 'rgba(255,255,255,0.4)');
       grad.addColorStop(0.6, 'rgba(0,229,255,0.35)');
@@ -569,14 +682,12 @@ function drawPlayerWithSkin(
       ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 2; ctx.stroke();
       ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2);
       ctx.strokeStyle = grad; ctx.lineWidth = 6; ctx.shadowBlur = 22; ctx.shadowColor = '#7ff3ff'; ctx.stroke(); ctx.shadowBlur = 0;
-      // highlight curbat
       ctx.beginPath();
       ctx.arc(sx - r * 0.3, sy - r * 0.4, r * 0.8, 0.2 * Math.PI, 0.55 * Math.PI);
       ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 3; ctx.stroke();
       break;
     }
     case 'circuit': {
-      // contur cyan + “linii” scurte ca trasee
       ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2);
       ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 5; ctx.shadowBlur = 16; ctx.shadowColor = '#00e5ff'; ctx.stroke(); ctx.shadowBlur = 0;
       ctx.save();
@@ -594,7 +705,6 @@ function drawPlayerWithSkin(
       break;
     }
     case 'hex': {
-      // grilă hexagonală pe margine
       ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2);
       ctx.strokeStyle = '#7de3ff'; ctx.lineWidth = 5; ctx.shadowBlur = 16; ctx.shadowColor = '#7de3ff'; ctx.stroke(); ctx.shadowBlur = 0;
       ctx.save();
@@ -618,7 +728,6 @@ function drawPlayerWithSkin(
       break;
     }
     case 'tiger': {
-      // dungi dinamice
       ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2);
       ctx.strokeStyle = '#ffd76a'; ctx.lineWidth = 5; ctx.shadowBlur = 16; ctx.shadowColor = '#ffd76a'; ctx.stroke(); ctx.shadowBlur = 0;
       ctx.save();
@@ -635,7 +744,6 @@ function drawPlayerWithSkin(
       break;
     }
     case 'aurora': {
-      // gradient polar rotativ
       const t = performance.now() * 0.0015;
       const ang = t % (Math.PI * 2);
       ctx.save();
@@ -650,14 +758,12 @@ function drawPlayerWithSkin(
       break;
     }
     default: {
-      // simple: cyan/magenta/lime/gold
       const strokeCol = outlineHex(outlineId);
       ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2);
       ctx.strokeStyle = strokeCol; ctx.lineWidth = 5; ctx.shadowBlur = 16; ctx.shadowColor = strokeCol; ctx.stroke(); ctx.shadowBlur = 0;
     }
   }
 
-  // flash la dash
   if (dashFlash > 0) {
     const a = Math.min(1, dashFlash * 4);
     ctx.beginPath(); ctx.arc(sx, sy, r + 14, 0, Math.PI * 2);
@@ -717,7 +823,6 @@ function drawTrailWithStyle(
       break;
     }
     case 'comet': {
-      // cap luminos + coadă subțire
       const head = trail[trail.length - 1];
       const hx = head.x - camX, hy = head.y - camY;
       const rad = 10;
@@ -738,7 +843,6 @@ function drawTrailWithStyle(
       break;
     }
     case 'holoTrail': {
-      // additive blending pentru un efect holografic
       const prev = ctx.globalCompositeOperation;
       ctx.globalCompositeOperation = 'lighter';
       for (let i = 1; i < trail.length; i++) {
@@ -755,7 +859,6 @@ function drawTrailWithStyle(
       break;
     }
     default: {
-      // neon clasic
       for (let i = 1; i < trail.length; i++) {
         const a = trail[i - 1], b = trail[i];
         const ax = a.x - camX, ay = a.y - camY;

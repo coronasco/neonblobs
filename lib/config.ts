@@ -58,12 +58,20 @@ export const POWERUPS = {
 };
 
 export const BOSS = {
-  INTERVAL: 80,     // sec între spawn-uri
-  DURATION: 25,     // sec activ
+  // interval aleator 8–12 minute
+  INTERVAL_MIN: 480,
+  INTERVAL_MAX: 720,
+  DURATION: 45,     // stă mai mult pe hartă
   RADIUS: 34,
-  VALUE: 120,       // scor mare
-  SPEED: 24,        // se mișcă încet
-};
+  VALUE: 220,       // scor mare la kill (absorb)
+  SPEED: 24,
+
+  // combat
+  AGGRO_RANGE: 620,
+  SHOOT_EVERY: 1.6,
+  BULLET_SPEED: 240,
+  BULLET_DMG: 45,
+} as const;
 
 export const UI_FONT = {
   SMALL: '600 12px Arial, Helvetica, sans-serif',

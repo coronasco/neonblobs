@@ -13,6 +13,7 @@ export function createWorld(): World {
     powerup: new Map(),   // ✅ nou
     bullet: new Map(),    // ✅ nou
     supply: new Map(),    // ✅ nou
+    health: new Map(), 
   };
 }
 
@@ -32,4 +33,5 @@ export function removeEntity(w: World, e: Entity): void {
   w.vel.delete(e);
   w.rad.delete(e);
   w.col.delete(e);
+  w.health.delete(e);
 }
