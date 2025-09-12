@@ -32,7 +32,7 @@ export async function bumpStats(userId: string, patch: Partial<Omit<StatsRow, 'u
   const next = {
     ...curr,
     ...Object.fromEntries(
-      Object.entries(patch).map(([k, v]) => [k, Math.max(0, (curr as any)[k] + (v as number))])
+      Object.entries(patch).map(([k, v]) => [k, Math.max(0, (curr[k as keyof StatsRow] as number) + (v as number))])
     ),
   };
   const { error } = await supabase.from('player_stats').upsert({

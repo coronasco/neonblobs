@@ -2,12 +2,9 @@
 import { BOSS, HOTSPOTS } from '@/lib/config';
 import type { World, Entity } from '../types';
 
-type Candidate = { e: Entity; d: number; x: number; y: number };
-
-// alegem un interval random între INTERVAL_MIN și INTERVAL_MAX
 function nextInterval(): number {
-  const min = BOSS.INTERVAL_MIN ?? 480; // fallback ~8 min
-  const max = BOSS.INTERVAL_MAX ?? 720; // fallback ~12 min
+  const min = BOSS.INTERVAL_MIN ?? 480; // ~8 min
+  const max = BOSS.INTERVAL_MAX ?? 720; // ~12 min
   return min + Math.random() * Math.max(1, max - min);
 }
 
@@ -18,6 +15,7 @@ let target: { x: number; y: number } | null = null;
 let fireCD = 0;
 
 export function bossSystem(w: World, dt: number): void {
+  // ===== boss activ =====
   if (bossId !== null) {
     bossT -= dt;
     fireCD = Math.max(0, fireCD - dt);
@@ -26,7 +24,7 @@ export function bossSystem(w: World, dt: number): void {
     const vel = w.vel.get(bossId);
     if (!pos || !vel) { bossId = null; return; }
 
-    // plimbare ușoară în interiorul unui hotspot
+    // mișcare lentă într-un punct țintă dintr-un hotspot
     if (!target) {
       const h = HOTSPOTS[Math.floor(Math.random() * HOTSPOTS.length)];
       target = {
@@ -43,8 +41,10 @@ export function bossSystem(w: World, dt: number): void {
     pos.y += vel.y * dt;
     if (d < 12) target = null;
 
-    // țintim cel mai apropiat player în range
-    let best: Candidate | null = null;
+    // caută cel mai apropiat player în range (fără 'never')
+    let bestE: Entity | null = null;
+    let bestX = 0, bestY = 0, bestD = Infinity;
+
     w.player.forEach((pl, e) => {
       if (!pl.alive) return;
       const p = w.pos.get(e);
@@ -52,14 +52,14 @@ export function bossSystem(w: World, dt: number): void {
       const ddx = p.x - pos.x;
       const ddy = p.y - pos.y;
       const dist = Math.hypot(ddx, ddy);
-      if (dist <= (BOSS.AGGRO_RANGE ?? 620)) {
-        if (!best || dist < best.d) best = { e, d: dist, x: p.x, y: p.y };
+      if (dist <= (BOSS.AGGRO_RANGE ?? 620) && dist < bestD) {
+        bestE = e; bestX = p.x; bestY = p.y; bestD = dist;
       }
     });
 
-    if (best && fireCD <= 0) {
-      const vx = (best.x - pos.x) / best.d;
-      const vy = (best.y - pos.y) / best.d;
+    if (bestE !== null && fireCD <= 0 && bestD > 0) {
+      const vx = (bestX - pos.x) / bestD;
+      const vy = (bestY - pos.y) / bestD;
       spawnBossBullet(
         w,
         pos.x,
@@ -73,6 +73,7 @@ export function bossSystem(w: World, dt: number): void {
       fireCD = baseCadence * (0.9 + Math.random() * 0.3);
     }
 
+    // expiră boss-ul
     if (bossT <= 0) {
       bossId = null;
       timer = nextInterval();
@@ -80,11 +81,11 @@ export function bossSystem(w: World, dt: number): void {
     return;
   }
 
-  // inactiv → așteaptă următorul spawn
+  // ===== boss inactiv — countdown până la spawn =====
   timer -= dt;
   if (timer > 0) return;
 
-  // spawn boss într-un hotspot
+  // spawn într-un hotspot
   const h = HOTSPOTS[Math.floor(Math.random() * HOTSPOTS.length)];
   const e = (w.nextId++);
   const x = h.x, y = h.y;
@@ -98,7 +99,7 @@ export function bossSystem(w: World, dt: number): void {
   bossId = e;
   bossT  = BOSS.DURATION ?? 45;
   timer  = nextInterval();
-  fireCD = 1.2; // mic delay înainte de primul foc
+  fireCD = 1.2; // mic delay până la primul foc
 }
 
 function spawnBossBullet(
@@ -119,6 +120,6 @@ function spawnBossBullet(
   w.vel.set(e, { x: vx, y: vy });
   w.rad.set(e, { r: 4 });
   w.col.set(e, { a: 1, b: 0.3, g: 0.7 }); // roz/violet
-  // owner negativ => nu există în w.player; e tratat ca non-player în bullets.ts
+  // owner "negativ" => proiectil de boss (nu e în w.player)
   w.bullet.set(e, { owner: (-1 as unknown as Entity), dmg, life: 2.5 });
 }

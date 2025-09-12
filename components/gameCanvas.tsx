@@ -639,7 +639,7 @@ export default function GameCanvas(): React.ReactElement {
       delete document.body.dataset.magnet;
       delete document.body.dataset.shield;
     };
-  }, [setUI, country, soundOn, hapticsOn, outlineId, trailId]);
+  }, [setUI, country, soundOn, hapticsOn, outlineId, trailId, ASPECT]);
 
   return (
     <div className="relative mx-auto w-full max-w-7xl select-none">
@@ -720,7 +720,11 @@ function drawPlayerWithSkin(
           const a = ang + (k / 6) * Math.PI * 2;
           const px = rx + Math.cos(a) * s;
           const py = ry + Math.sin(a) * s;
-          k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+          if (k === 0) {
+            ctx.moveTo(px, py);
+          } else {
+            ctx.lineTo(px, py);
+          }
         }
         ctx.closePath(); ctx.stroke();
       }

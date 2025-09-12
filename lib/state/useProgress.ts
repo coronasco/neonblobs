@@ -14,41 +14,64 @@ type ProgressState = {
   maxHp: number;
   hydrate: () => Promise<void>;
   addXp: (delta: number) => Promise<void>;
-  setStats: (patch: Partial<Pick<ProgressRow, 'attack'|'defense'|'max_hp'>>) => Promise<void>;
+  patchStats: (patch: Partial<{ attack: number; defense: number; max_hp: number }>) => Promise<void>;
 };
 
 export const useProgress = create<ProgressState>((set, get) => ({
   loaded: false,
-  userId: undefined,
+  userId: null,
   level: 1,
   xp: 0,
   attack: 10,
-  defense: 5,
+  defense: 0,
   maxHp: 100,
 
   hydrate: async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    const userId = session?.user?.id ?? null;
-    set({ userId });
+    const { data } = await supabase.auth.getUser();
+    const user = data.user ?? null;
+    set({ userId: user?.id ?? null });
 
-    if (!userId) { set({ loaded: true }); return; }
+    // guest fallback → HUD activ, valori implicite
+    if (!user?.id) {
+      set({ loaded: true, level: 1, xp: 0, attack: 10, defense: 0, maxHp: 100 });
+      return;
+    }
 
-    const p = await loadProgress(userId);
+    const row = await loadProgress(user.id);
     set({
-      level: p.level, xp: p.xp, attack: p.attack, defense: p.defense, maxHp: p.max_hp, loaded: true,
+      loaded: true,
+      level: row.level,
+      xp: row.xp,
+      attack: row.attack,
+      defense: row.defense,
+      maxHp: row.max_hp,
     });
   },
 
-  addXp: async (delta) => {
+  addXp: async (delta: number) => {
     const userId = get().userId;
-    if (!userId) return; // guest → nu salvăm
-    const p = await addXpServer(userId, delta);
-    set({ level: p.level, xp: p.xp });
+    if (!userId) {
+      // guest mode – simulează local
+      let xp = Math.max(0, get().xp + delta);
+      let level = get().level;
+      while (xp >= 100) { xp -= 100; level += 1; }
+      set({ xp, level });
+      return;
+    }
+    const next = await addXpServer(userId, delta);
+    set({ xp: next.xp, level: next.level });
   },
 
-  setStats: async (patch) => {
+  patchStats: async (patch) => {
     const userId = get().userId;
-    if (!userId) return;
+    if (!userId) {
+      set({
+        attack: patch.attack ?? get().attack,
+        defense: patch.defense ?? get().defense,
+        maxHp: patch.max_hp ?? get().maxHp,
+      });
+      return;
+    }
     const p: ProgressRow = {
       user_id: userId,
       level: get().level,

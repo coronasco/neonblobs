@@ -10,8 +10,8 @@ export const GAME = {
 
 // HARTA — mult mai mare; fără wrap
 export const MAP = {
-  WIDTH: 10000,
-  HEIGHT: 6000,
+  WIDTH: 2600,
+  HEIGHT: 1800,
   WRAP: false
 } as const;
 

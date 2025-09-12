@@ -1,13 +1,13 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { useAuth } from '@/lib/auth/SupabaseProvider';
 import { Gamepad2, LogIn, ShieldCheck, Mail, KeyRound, ArrowLeft, UserRound } from 'lucide-react';
 
-export default function LoginPage(): React.ReactElement {
+function LoginForm(): React.ReactElement {
   const router = useRouter();
   const search = useSearchParams();
   const redirectTo = useMemo(() => search.get('redirect') ?? '/play', [search]);
@@ -212,5 +212,17 @@ export default function LoginPage(): React.ReactElement {
         </div>
       )}
     </div>
+  );
+}
+
+export default function LoginPage(): React.ReactElement {
+  return (
+    <Suspense fallback={
+      <div className="min-h-[100dvh] bg-[#070b16] flex items-center justify-center">
+        <div className="text-white">Loading...</div>
+      </div>
+    }>
+      <LoginForm />
+    </Suspense>
   );
 }

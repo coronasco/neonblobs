@@ -75,7 +75,7 @@ export function botSystem(w: World, dt: number): void {
 
   // ===== Threat detect în hotspot: dacă bot-ul e în hotspot și un player intră aproape -> îl ia aggro
   for (const b of bots) {
-    const bp = w.pos.get(b)!; const br = w.rad.get(b)!.r;
+    const bp = w.pos.get(b)!;
     if (!inHotspot(bp.x, bp.y)) continue;
     for (const h of humans) {
       const hp = w.pos.get(h)!;

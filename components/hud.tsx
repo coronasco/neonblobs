@@ -39,12 +39,12 @@ export default function Hud(): React.ReactElement {
           {formatScore(ui.score)}
         </div>
         {/* LEVEL AND XP */}
-        {loaded && (
-          <div className="rounded-lg bg-black/40 px-3 py-1 text-sm ring-1 ring-white/10 w-[100px]">
-            <span className="font-semibold text-white/90">LV {level}</span>
-            <span className="ml-2 text-white/60">XP {xp}</span>
-          </div>
-        )}
+        
+        <div className="rounded-lg bg-black/40 px-3 py-1 text-sm ring-1 ring-white/10 w-[100px]">
+          <span className="font-semibold text-white/90">LV {level}</span>
+          <span className="ml-2 text-white/60">XP {xp}</span>
+        </div>
+        
         {combo > 1 && (
           <div className="rounded-lg bg-amber-400/20 px-3 py-1 text-sm md:text-lg font-bold text-amber-300 ring-1 ring-amber-300/40">
             COMBO x{combo}
