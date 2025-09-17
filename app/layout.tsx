@@ -54,6 +54,15 @@ export default function RootLayout({
             gtag('config', 'G-5EQTB2ZJFS');
           `}
         </Script>
+
+        {/* Google AdSense */}
+        <Script
+          id="google-adsense"
+          src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7278381785440044"
+          strategy="afterInteractive"
+          async
+          crossOrigin="anonymous"
+        />
         
         <SupabaseProvider>
           {children}
