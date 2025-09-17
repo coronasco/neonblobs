@@ -29,6 +29,9 @@ export const metadata: Metadata = {
     title: 'Blobeer - Multiplayer Arena Battle Game',
     description: 'The ultimate multiplayer .io arena experience. Play now for free!',
   },
+  other: {
+    'google-adsense-account': 'ca-pub-7278381785440044',
+  },
 };
 
 export default function RootLayout({
