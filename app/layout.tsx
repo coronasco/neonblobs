@@ -56,11 +56,14 @@ export default function RootLayout({
         </Script>
 
         {/* Google AdSense */}
-        <Script
-          async
-          src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7278381785440044"
-          crossorigin="anonymous"
-        />
+        <Script id="google-adsense" strategy="afterInteractive">
+          {`
+            async
+            src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7278381785440044"
+            crossorigin="anonymous"
+          `}
+          
+        </Script>
         
         <SupabaseProvider>
           {children}
